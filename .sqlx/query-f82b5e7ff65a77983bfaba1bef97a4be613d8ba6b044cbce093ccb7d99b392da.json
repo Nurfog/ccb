@@ -1,0 +1,68 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO clients (name, client_type, contract_expires_at)\n        VALUES ($1, $2::client_type_enum, $3)\n        RETURNING id, name, client_type as \"client_type: _\", contract_expires_at, created_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "client_type: _",
+        "type_info": {
+          "Custom": {
+            "name": "client_type_enum",
+            "kind": {
+              "Enum": [
+                "company",
+                "natural_person"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "contract_expires_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        {
+          "Custom": {
+            "name": "client_type_enum",
+            "kind": {
+              "Enum": [
+                "company",
+                "natural_person"
+              ]
+            }
+          }
+        },
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "f82b5e7ff65a77983bfaba1bef97a4be613d8ba6b044cbce093ccb7d99b392da"
+}

@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  # Servicio de Base de Datos para ML
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: ccb_db
+    environment:
+      - POSTGRES_DB=ml_db
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  # Servicio de Backend (API Rust)
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: ccb_backend
+    depends_on:
+      - db
+    environment:
+      # Sobrescribimos la URL para que dentro de Docker use el nombre del servicio 'db'
+      - DATABASE_URL=postgres://user:password@db:5432/ml_db
+    ports:
+      - "3000:3000" # Expone la API en http://localhost:3000
+
+  # Servicio de Frontend (HTML/Nginx)
+  frontend:
+    build: ./frontend
+    container_name: ccb_frontend
+    ports:
+      - "8080:80" # Expone el frontend en http://localhost:8080
+    depends_on:
+      - backend
+
+  # Servicio de Machine Learning con GPU (opcional)
+  # Usar: docker compose --profile gpu up -d
+  ml_service_gpu:
+    build:
+      context: ./ml_service
+      dockerfile: Dockerfile
+    container_name: ccb_ml_service
+    profiles: [ "gpu" ]
+    depends_on:
+      - db
+    environment:
+      - DATABASE_URL=postgres://user:password@db:5432/ml_db
+      - CUDA_VISIBLE_DEVICES=0
+      - ML_DEVICE=cuda
+    ports:
+      - "8000:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+
+  # Servicio de Machine Learning CPU-only (por defecto)
+  # Usar: docker compose up -d (sin --profile)
+  ml_service:
+    build:
+      context: ./ml_service
+      dockerfile: Dockerfile.cpu
+    container_name: ccb_ml_service
+    profiles: [ "cpu", "" ] # Se ejecuta por defecto
+    depends_on:
+      - db
+    environment:
+      - DATABASE_URL=postgres://user:password@db:5432/ml_db
+      - ML_DEVICE=cpu
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:

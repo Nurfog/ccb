@@ -1,0 +1,305 @@
+import { useAuth } from '../context/AuthContext';
+import { useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { LogOut, TrendingUp, Users, Building, Database, BarChart3, Activity, Clock, FileText } from 'lucide-react';
+
+export default function Dashboard() {
+    const { user, logout, token } = useAuth();
+    const navigate = useNavigate();
+    const [stats, setStats] = useState(null);
+    const [analytics, setAnalytics] = useState(null);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        fetchData();
+    }, []);
+
+    const fetchData = async () => {
+        try {
+            const [statsRes, analyticsRes] = await Promise.all([
+                fetch('/api/stats', { headers: { 'Authorization': `Bearer ${token}` } }),
+                fetch('/api/analytics', { headers: { 'Authorization': `Bearer ${token}` } })
+            ]);
+
+            if (statsRes.ok) setStats(await statsRes.json());
+            if (analyticsRes.ok) setAnalytics(await analyticsRes.json());
+        } catch (e) {
+            console.error("Error fetching data", e);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleLogout = () => {
+        logout();
+        navigate('/login');
+    };
+
+    const formatDate = (dateStr) => {
+        if (!dateStr) return 'N/A';
+        const date = new Date(dateStr);
+        return date.toLocaleDateString('es-ES', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    };
+
+    const MetricCard = ({ title, value, icon: Icon, color, subtitle }) => (
+        <div className="card" style={{
+            background: `linear-gradient(135deg, ${color}22 0%, ${color}11 100%)`,
+            borderLeft: `4px solid ${color}`,
+            padding: '1.5rem',
+            position: 'relative',
+            overflow: 'hidden'
+        }}>
+            <div style={{ position: 'absolute', right: '-10px', top: '-10px', opacity: 0.1 }}>
+                <Icon size={120} color={color} />
+            </div>
+            <div style={{ position: 'relative', zIndex: 1 }}>
+                <p style={{ margin: 0, color: '#94a3b8', fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{title}</p>
+                <h2 style={{ margin: '0.5rem 0', fontSize: '2.5rem', fontWeight: 'bold', color: color }}>{loading ? '...' : value}</h2>
+                {subtitle && <p style={{ margin: 0, fontSize: '0.9rem', color: '#cbd5e1' }}>{subtitle}</p>}
+            </div>
+        </div>
+    );
+
+    const QuickActionCard = ({ title, description, icon: Icon, color, onClick }) => (
+        <div className="card" style={{
+            padding: '1.5rem',
+            cursor: 'pointer',
+            transition: 'all 0.3s',
+            borderLeft: `3px solid ${color}`,
+        }}
+            onClick={onClick}
+            onMouseEnter={(e) => {
+                e.currentTarget.style.transform = 'translateY(-4px)';
+                e.currentTarget.style.borderLeftWidth = '5px';
+            }}
+            onMouseLeave={(e) => {
+                e.currentTarget.style.transform = 'translateY(0)';
+                e.currentTarget.style.borderLeftWidth = '3px';
+            }}
+        >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.75rem' }}>
+                <div style={{
+                    background: `${color}22`,
+                    padding: '0.75rem',
+                    borderRadius: '10px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                }}>
+                    <Icon size={24} color={color} />
+                </div>
+                <h3 style={{ margin: 0, fontSize: '1.1rem' }}>{title}</h3>
+            </div>
+            <p style={{ margin: 0, fontSize: '0.9rem', color: '#94a3b8' }}>{description}</p>
+        </div>
+    );
+
+    return (
+        <div className="container" style={{ padding: '2rem', maxWidth: '1400px' }}>
+            <header className="app-header" style={{ marginBottom: '2rem' }}>
+                <div>
+                    <h1 style={{ margin: 0, fontSize: '2rem', background: 'linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+                        Dashboard Analytics
+                    </h1>
+                    <div style={{ marginTop: '0.5rem', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span>Bienvenido,</span>
+                        <strong style={{ color: '#fff' }}>{user?.email}</strong>
+                        <span style={{
+                            background: user?.role === 'root' ? '#dc2626' : user?.role === 'company_admin' ? '#ca8a04' : '#2563eb',
+                            color: '#fff',
+                            padding: '2px 8px',
+                            borderRadius: '999px',
+                            fontSize: '0.7rem',
+                            textTransform: 'uppercase',
+                            fontWeight: 'bold',
+                            marginLeft: '0.5rem'
+                        }}>
+                            {user?.role?.replace('_', ' ')}
+                        </span>
+                    </div>
+                </div>
+                <button onClick={handleLogout} className="btn btn-ghost">
+                    <LogOut size={18} /> Cerrar Sesión
+                </button>
+            </header>
+
+            {/* Metrics Grid */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
+                {user?.role === 'root' && (
+                    <MetricCard
+                        title="Total Empresas"
+                        value={stats?.total_clients || 0}
+                        icon={Building}
+                        color="#10b981"
+                        subtitle="Clientes registrados"
+                    />
+                )}
+                <MetricCard
+                    title={user?.role === 'root' ? "Total Usuarios" : "Miembros del Equipo"}
+                    value={stats?.total_users || 0}
+                    icon={Users}
+                    color="#3b82f6"
+                    subtitle={user?.role === 'user' ? 'Tu cuenta' : 'En el sistema'}
+                />
+                <MetricCard
+                    title="Usuarios Activos"
+                    value={stats?.active_users || 0}
+                    icon={Activity}
+                    color="#f59e0b"
+                    subtitle="Con acceso habilitado"
+                />
+                <MetricCard
+                    title="Datasets Cargados"
+                    value={stats?.total_datasets || 0}
+                    icon={Database}
+                    color="#8b5cf6"
+                    subtitle="Archivos procesados"
+                />
+            </div>
+
+            {/* Analytics Section */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(450px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
+                {/* Recent Uploads */}
+                <div className="card" style={{ padding: '1.5rem' }}>
+                    <h3 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#3b82f6', marginBottom: '1.5rem' }}>
+                        <FileText size={24} />
+                        Últimos Uploads
+                    </h3>
+
+                    {loading ? (
+                        <div style={{ textAlign: 'center', padding: '2rem', color: '#64748b' }}>
+                            Cargando...
+                        </div>
+                    ) : analytics?.recent_uploads?.length > 0 ? (
+                        <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                            {analytics.recent_uploads.map((upload, idx) => (
+                                <div key={idx} style={{
+                                    padding: '1rem',
+                                    background: 'rgba(255,255,255,0.03)',
+                                    borderLeft: '3px solid #3b82f6',
+                                    borderRadius: '6px',
+                                    marginBottom: '0.75rem',
+                                    transition: 'all 0.2s'
+                                }}
+                                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.06)'}
+                                    onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'}
+                                >
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+                                        <strong style={{ color: '#fff', fontSize: '0.95rem' }}>{upload.schema_name}</strong>
+                                        <span style={{
+                                            background: '#3b82f622',
+                                            color: '#60a5fa',
+                                            padding: '2px 8px',
+                                            borderRadius: '4px',
+                                            fontSize: '0.75rem',
+                                            fontWeight: 'bold'
+                                        }}>
+                                            {upload.row_count?.toLocaleString() || 0} filas
+                                        </span>
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#94a3b8', fontSize: '0.8rem' }}>
+                                        <Clock size={14} />
+                                        {formatDate(upload.created_at)}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <div style={{ textAlign: 'center', padding: '3rem', color: '#64748b' }}>
+                            <Database size={48} style={{ opacity: 0.3, marginBottom: '1rem' }} />
+                            <p style={{ margin: 0 }}>No hay datos cargados aún</p>
+                            <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.9rem' }}>Sube tu primer archivo para comenzar</p>
+                        </div>
+                    )}
+                </div>
+
+                {/* Stats Summary */}
+                <div className="card" style={{ padding: '1.5rem' }}>
+                    <h3 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#8b5cf6' }}>
+                        <BarChart3 size={24} />
+                        Resumen de Datos
+                    </h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', marginTop: '1.5rem' }}>
+                        <div style={{
+                            padding: '1.5rem',
+                            background: 'linear-gradient(135deg, #8b5cf622 0%, #8b5cf611 100%)',
+                            borderRadius: '12px',
+                            borderLeft: '4px solid #8b5cf6',
+                            textAlign: 'center'
+                        }}>
+                            <p style={{ margin: 0, color: '#94a3b8', fontSize: '0.9rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total Filas Procesadas</p>
+                            <h2 style={{ margin: '0.5rem 0 0 0', fontSize: '3rem', fontWeight: 'bold', color: '#a78bfa' }}>
+                                {analytics?.total_rows?.toLocaleString() || 0}
+                            </h2>
+                        </div>
+
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', background: 'rgba(255,255,255,0.03)', borderRadius: '8px' }}>
+                            <span style={{ color: '#94a3b8' }}>Estado del Sistema</span>
+                            <span style={{ color: '#10b981', fontWeight: 'bold' }}>● Operativo</span>
+                        </div>
+
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', background: 'rgba(255,255,255,0.03)', borderRadius: '8px' }}>
+                            <span style={{ color: '#94a3b8' }}>Base de Datos</span>
+                            <span style={{ color: '#10b981', fontWeight: 'bold' }}>● Conectada</span>
+                        </div>
+
+                        {analytics?.recent_uploads && analytics.recent_uploads.length > 0 && (
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', background: 'rgba(255,255,255,0.03)', borderRadius: '8px' }}>
+                                <span style={{ color: '#94a3b8' }}>Último Upload</span>
+                                <span style={{ color: '#60a5fa', fontSize: '0.85rem', fontWeight: 'bold' }}>
+                                    {formatDate(analytics.recent_uploads[0]?.created_at)}
+                                </span>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+
+            {/* Quick Actions */}
+            <h2 style={{ fontSize: '1.5rem', marginBottom: '1rem', color: '#fff' }}>Acciones Rápidas</h2>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.5rem' }}>
+                {user?.role === 'root' && (
+                    <>
+                        <QuickActionCard
+                            title="Registrar Empresa"
+                            description="Da de alta una nueva empresa en el sistema"
+                            icon={Building}
+                            color="#10b981"
+                            onClick={() => navigate('/create-client')}
+                        />
+                        <QuickActionCard
+                            title="Crear Usuario"
+                            description="Añade un nuevo administrador o usuario"
+                            icon={Users}
+                            color="#3b82f6"
+                            onClick={() => navigate('/create-user')}
+                        />
+                    </>
+                )}
+                {(user?.role === 'company_admin' || user?.role === 'root') && (
+                    <QuickActionCard
+                        title="Gestionar Equipo"
+                        description="Administra usuarios y permisos de tu empresa"
+                        icon={Users}
+                        color="#8b5cf6"
+                        onClick={() => navigate('/company/users')}
+                    />
+                )}
+                <QuickActionCard
+                    title="Entrenar Modelo ML"
+                    description="Entrena modelos de Machine Learning con GPU"
+                    icon={TrendingUp}
+                    color="#06b6d4"
+                    onClick={() => navigate('/train-model')}
+                />
+                <QuickActionCard
+                    title="Cargar Datos"
+                    description="Sube archivos CSV o Excel para entrenamiento"
+                    icon={Database}
+                    color="#f59e0b"
+                    onClick={() => navigate('/upload-data')}
+                />
+            </div>
+        </div>
+    );
+}

@@ -1,0 +1,5 @@
+{
+    "rust-analyzer.server.extraEnv": {
+        "DATABASE_URL": "postgres://user:password@localhost:5432/ml_db"
+    }
+}

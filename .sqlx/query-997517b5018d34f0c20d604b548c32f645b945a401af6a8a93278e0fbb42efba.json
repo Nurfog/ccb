@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT id as schema_id, schema_name, row_count, created_at\n            FROM ml_schemas\n            ORDER BY created_at DESC\n            LIMIT 10\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "schema_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "schema_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "row_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "997517b5018d34f0c20d604b548c32f645b945a401af6a8a93278e0fbb42efba"
+}

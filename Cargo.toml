@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = [
+    "backend",
+    # "libs/shared_lib", # Descomentar cuando el crate exista
+    # "frontend",        # Descomentar si es un crate de Rust (ej. Yew, Dioxus)
+]
+
+# Opcional: Define dependencias compartidas para todos los miembros del workspace.
+# Esto ayuda a mantener las versiones consistentes.
+[workspace.dependencies]
+axum = "0.7.5"
+tokio = { version = "1.38.0", features = ["full"] }
+serde = { version = "1.0.203", features = ["derive"] }
+serde_json = "1.0.117"
+dotenvy = "0.15.7"
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }
+uuid = { version = "1.10.0", features = ["v4", "serde"] }
+chrono = { version = "0.4.38", features = ["serde"] }

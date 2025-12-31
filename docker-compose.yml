@@ -26,7 +26,7 @@ services:
       # Sobrescribimos la URL para que dentro de Docker use el nombre del servicio 'db'
       - DATABASE_URL=postgres://user:password@db:5432/ml_db
     ports:
-      - "3000:3000" # Expone la API en http://localhost:3000
+      - "3004:3000" # Expone la API en http://localhost:3000
 
   # Servicio de Frontend (HTML/Nginx)
   frontend:
@@ -52,7 +52,7 @@ services:
       - CUDA_VISIBLE_DEVICES=0
       - ML_DEVICE=cuda
     ports:
-      - "8000:8000"
+      - "8004:8000"
     deploy:
       resources:
         reservations:
@@ -60,6 +60,9 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [ gpu ]
+    volumes:
+      - ./ml_service:/app
+      - ./ml_service/models:/app/models
 
   # Servicio de Machine Learning CPU-only (por defecto)
   # Usar: docker compose up -d (sin --profile)
@@ -75,7 +78,10 @@ services:
       - DATABASE_URL=postgres://user:password@db:5432/ml_db
       - ML_DEVICE=cpu
     ports:
-      - "8000:8000"
+      - "8004:8000"
+    volumes:
+      - ./ml_service:/app
+      - ./ml_service/models:/app/models
 
 volumes:
   pgdata:

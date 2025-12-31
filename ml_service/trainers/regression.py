@@ -1,18 +1,20 @@
 """
-Trainer para modelos de regresión
+Trainer para modelos de regresión con soporte para datos categóricos y fechas
 """
 import torch
 import torch.nn as nn
 import numpy as np
-from typing import Dict, List, Tuple
+import pandas as pd
+from typing import Dict, List, Tuple, Any
 import logging
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 class SimpleRegressionModel(nn.Module):
     """Modelo de regresión simple con capas fully connected"""
     
-    def __init__(self, input_dim: int, hidden_dims: List[int] = [64, 32]):
+    def __init__(self, input_dim: int, hidden_dims: List[int] = [128, 64, 32]):
         super().__init__()
         
         layers = []
@@ -21,6 +23,7 @@ class SimpleRegressionModel(nn.Module):
         # Hidden layers
         for hidden_dim in hidden_dims:
             layers.append(nn.Linear(prev_dim, hidden_dim))
+            layers.append(nn.BatchNorm1d(hidden_dim))
             layers.append(nn.ReLU())
             layers.append(nn.Dropout(0.2))
             prev_dim = hidden_dim
@@ -34,10 +37,11 @@ class SimpleRegressionModel(nn.Module):
         return self.network(x)
 
 class RegressionTrainer:
-    """Entrenador de modelos de regresión"""
+    """Entrenador de modelos de regresión con Feature Engineering básico"""
     
     def __init__(self, device: torch.device):
         self.device = device
+        self.feature_metadata = {}
     
     def prepare_data(
         self, 
@@ -45,61 +49,81 @@ class RegressionTrainer:
         target_column: str
     ) -> Tuple[torch.Tensor, torch.Tensor, List[str]]:
         """
-        Prepara datos para entrenamiento
-        
-        Args:
-            data: Lista de diccionarios con los datos
-            target_column: Nombre de la columna objetivo
-            
-        Returns:
-            X_tensor, y_tensor, feature_names
+        Prepara datos para entrenamiento con codificación de categorías y fechas
         """
         if not data:
             raise ValueError("No hay datos para entrenar")
         
-        # Identificar columnas numéricas (excluyendo target)
-        first_row = data[0]
+        df = pd.DataFrame(data)
+        
+        if target_column not in df.columns:
+            raise ValueError(f"Columna objetivo '{target_column}' no encontrada")
+
+        # 1. Limpiar Target (asegurar que sea numérico)
+        df[target_column] = pd.to_numeric(df[target_column], errors='coerce')
+        df = df.dropna(subset=[target_column])
+        
         feature_names = []
-        
-        for key, value in first_row.items():
-            if key != target_column:
-                try:
-                    float(value)
-                    feature_names.append(key)
-                except (ValueError, TypeError):
-                    logger.warning(f"Columna '{key}' no es numérica, ignorando")
-        
-        if not feature_names:
-            raise ValueError("No se encontraron features numéricas")
-        
-        # Extraer features y target
-        X = []
-        y = []
-        
-        for row in data:
-            try:
-                features = [float(row.get(fname, 0)) for fname in feature_names]
-                target = float(row.get(target_column, 0))
-                X.append(features)
-                y.append(target)
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Error procesando fila: {e}")
+        processed_features = []
+
+        # 2. Procesar Columnas
+        for col in df.columns:
+            if col == target_column or col.lower() == 'id' or col.lower().startswith('id'):
+                logger.info(f"Ignorando columna de ID: {col}")
                 continue
+            
+            # Intentar convertir fechas
+            if 'fecha' in col.lower() or 'date' in col.lower():
+                try:
+                    dates = pd.to_datetime(df[col], errors='coerce')
+                    if not dates.isna().all():
+                        df[f'{col}_month'] = dates.dt.month
+                        df[f'{col}_day'] = dates.dt.dayofweek
+                        feature_names.extend([f'{col}_month', f'{col}_day'])
+                        self.feature_metadata[col] = { 'type': 'date' }
+                        logger.info(f"Fecha detectada en '{col}', extraídos mes y día.")
+                        continue
+                except:
+                    pass
+
+            # Intentar numérico
+            is_numeric = pd.to_numeric(df[col], errors='coerce')
+            if not is_numeric.isna().all():
+                # Rellenar nulos con media
+                df[col] = is_numeric.fillna(is_numeric.mean())
+                feature_names.append(col)
+                self.feature_metadata[col] = { 'type': 'numeric' }
+                logger.info(f"Columna numérica detectada: {col}")
+            else:
+                # Categórico (Label Encoding simple)
+                codes, uniques = pd.factorize(df[col])
+                df[col] = codes
+                self.feature_metadata[col] = {
+                    'type': 'categorical',
+                    'uniques': uniques.tolist()
+                }
+                feature_names.append(col)
+                logger.info(f"Columna categórica detectada: {col} ({len(uniques)} categorías)")
+
+        # 3. Preparar tensores finales
+        X_df = df[feature_names].astype(np.float32)
+        y_df = df[target_column].astype(np.float32).values.reshape(-1, 1)
         
-        X = np.array(X, dtype=np.float32)
-        y = np.array(y, dtype=np.float32).reshape(-1, 1)
+        # Normalización (Z-Score)
+        X_mean = X_df.mean()
+        X_std = X_df.std() + 1e-8
+        X_normalized = (X_df - X_mean) / X_std
         
-        # Normalizar features
-        X_mean = X.mean(axis=0)
-        X_std = X.std(axis=0) + 1e-8
-        X = (X - X_mean) / X_std
+        # Guardar metadatos para inferencia futura
+        self.feature_metadata['stats'] = {
+            'mean': X_mean.to_dict(),
+            'std': X_std.to_dict()
+        }
+
+        X_tensor = torch.from_numpy(X_normalized.values).to(self.device).contiguous()
+        y_tensor = torch.from_numpy(y_df).to(self.device).contiguous()
         
-        # Convertir a tensors
-        X_tensor = torch.from_numpy(X).to(self.device)
-        y_tensor = torch.from_numpy(y).to(self.device)
-        
-        logger.info(f"Datos preparados: {X_tensor.shape[0]} samples, {X_tensor.shape[1]} features")
-        
+        logger.info(f"Datos finales: {X_tensor.shape[0]} muestras, {X_tensor.shape[1]} features")
         return X_tensor, y_tensor, feature_names
     
     def train(
@@ -111,10 +135,7 @@ class RegressionTrainer:
         batch_size: int = 32
     ) -> Tuple[nn.Module, Dict]:
         """
-        Entrena un modelo de regresión
-        
-        Returns:
-            model, metrics
+        Entrena el modelo con los tensores preparados
         """
         input_dim = X.shape[1]
         model = SimpleRegressionModel(input_dim).to(self.device)
@@ -125,60 +146,45 @@ class RegressionTrainer:
         n_samples = X.shape[0]
         n_batches = (n_samples + batch_size - 1) // batch_size
         
-        history = {
-            'loss': [],
-            'epoch': []
-        }
-        
-        logger.info(f"Iniciando entrenamiento: {epochs} epochs, {n_samples} samples, batch_size={batch_size}")
+        logger.info(f"Entrenando en {self.device}...")
         
         model.train()
         for epoch in range(epochs):
-            epoch_loss = 0.0
-            
-            # Shuffle data
             indices = torch.randperm(n_samples)
-            X_shuffled = X[indices]
-            y_shuffled = y[indices]
+            X_sh = X[indices]
+            y_sh = y[indices]
             
+            epoch_loss = 0.0
             for i in range(0, n_samples, batch_size):
-                batch_X = X_shuffled[i:i+batch_size]
-                batch_y = y_shuffled[i:i+batch_size]
+                batch_X = X_sh[i:i+batch_size]
+                batch_y = y_sh[i:i+batch_size]
                 
                 optimizer.zero_grad()
-                predictions = model(batch_X)
-                loss = criterion(predictions, batch_y)
+                pred = model(batch_X)
+                loss = criterion(pred, batch_y)
                 loss.backward()
                 optimizer.step()
-                
                 epoch_loss += loss.item()
             
-            avg_loss = epoch_loss / n_batches
-            history['loss'].append(avg_loss)
-            history['epoch'].append(epoch)
-            
-            if (epoch + 1) % 10 == 0:
-                logger.info(f"Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.6f}")
-        
-        # Calcular métricas finales
+            if (epoch + 1) % 20 == 0:
+                logger.info(f"Epoch {epoch+1}/{epochs} - Loss: {epoch_loss/n_batches:.6f}")
+
+        # Métricas finales
         model.eval()
         with torch.no_grad():
-            final_predictions = model(X)
-            final_loss = criterion(final_predictions, y).item()
+            preds = model(X)
+            final_loss = criterion(preds, y).item()
             
-            # R² score
-            ss_res = torch.sum((y - final_predictions) ** 2).item()
+            # R2 Score
+            ss_res = torch.sum((y - preds) ** 2).item()
             ss_tot = torch.sum((y - y.mean()) ** 2).item()
-            r2_score = 1 - (ss_res / ss_tot)
-        
-        metrics = {
-            'final_loss': final_loss,
-            'r2_score': r2_score,
-            'epochs_trained': epochs,
+            r2_score = 1 - (ss_res / (ss_tot + 1e-8))
+            
+        return model, {
+            'final_loss': float(final_loss),
+            'r2_score': float(r2_score),
             'samples': n_samples,
-            'features': input_dim
+            'features': input_dim,
+            'metadata': self.feature_metadata
         }
-        
-        logger.info(f"Entrenamiento completado - Loss: {final_loss:.6f}, R²: {r2_score:.4f}")
-        
-        return model, metrics
+

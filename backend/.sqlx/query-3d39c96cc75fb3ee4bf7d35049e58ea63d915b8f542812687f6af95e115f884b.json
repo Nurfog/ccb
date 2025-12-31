@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO ml_schemas (client_id, schema_name, columns, row_count)\n        VALUES ($1, $2, $3, $4)\n        ON CONFLICT (schema_name) DO UPDATE \n        SET row_count = ml_schemas.row_count + $4, updated_at = NOW()\n        RETURNING id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "Jsonb",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3d39c96cc75fb3ee4bf7d35049e58ea63d915b8f542812687f6af95e115f884b"
+}

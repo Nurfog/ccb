@@ -1,13 +1,16 @@
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
-import { LogOut, TrendingUp, Users, Building, Database, BarChart3, Activity, Clock, FileText } from 'lucide-react';
+import { LogOut, TrendingUp, Users, Building, Database, BarChart3, Activity, Clock, FileText, Shield, Download, FileSpreadsheet } from 'lucide-react';
+import DashboardCharts from '../components/DashboardCharts';
+import NotificationsDropdown from '../components/NotificationsDropdown';
 
 export default function Dashboard() {
     const { user, logout, token } = useAuth();
     const navigate = useNavigate();
     const [stats, setStats] = useState(null);
     const [analytics, setAnalytics] = useState(null);
+    const [charts, setCharts] = useState(null);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
@@ -16,13 +19,15 @@ export default function Dashboard() {
 
     const fetchData = async () => {
         try {
-            const [statsRes, analyticsRes] = await Promise.all([
+            const [statsRes, analyticsRes, chartsRes] = await Promise.all([
                 fetch('/api/stats', { headers: { 'Authorization': `Bearer ${token}` } }),
-                fetch('/api/analytics', { headers: { 'Authorization': `Bearer ${token}` } })
+                fetch('/api/analytics', { headers: { 'Authorization': `Bearer ${token}` } }),
+                fetch('/api/stats/charts', { headers: { 'Authorization': `Bearer ${token}` } })
             ]);
 
             if (statsRes.ok) setStats(await statsRes.json());
             if (analyticsRes.ok) setAnalytics(await analyticsRes.json());
+            if (chartsRes.ok) setCharts(await chartsRes.json());
         } catch (e) {
             console.error("Error fetching data", e);
         } finally {
@@ -118,9 +123,12 @@ export default function Dashboard() {
                         </span>
                     </div>
                 </div>
-                <button onClick={handleLogout} className="btn btn-ghost">
-                    <LogOut size={18} /> Cerrar Sesión
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+                    <NotificationsDropdown />
+                    <button onClick={handleLogout} className="btn btn-ghost">
+                        <LogOut size={18} /> Cerrar Sesión
+                    </button>
+                </div>
             </header>
 
             {/* Metrics Grid */}
@@ -156,6 +164,9 @@ export default function Dashboard() {
                     subtitle="Archivos procesados"
                 />
             </div>
+
+            {/* Charts Section */}
+            <DashboardCharts data={charts} role={user?.role} />
 
             {/* Analytics Section */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(450px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
@@ -293,12 +304,50 @@ export default function Dashboard() {
                     onClick={() => navigate('/train-model')}
                 />
                 <QuickActionCard
+                    title="Realizar Predicciones"
+                    description="Usa modelos entrenados para predecir resultados"
+                    icon={Activity}
+                    color="#ec4899"
+                    onClick={() => navigate('/predictions')}
+                />
+                <QuickActionCard
                     title="Cargar Datos"
                     description="Sube archivos CSV o Excel para entrenamiento"
                     icon={Database}
                     color="#f59e0b"
                     onClick={() => navigate('/upload-data')}
                 />
+                {user.role === 'root' && (
+                    <QuickActionCard
+                        title="Logs de Auditoría"
+                        description="Ver historial de seguridad y acciones"
+                        icon={Shield}
+                        color="#ef4444"
+                        onClick={() => navigate('/admin/logs')}
+                    />
+                )}
+            </div>
+
+            <div style={{ marginTop: '2.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                    <h2 style={{ margin: 0 }}>Exportar Datos</h2>
+                </div>
+                <div className="card" style={{ padding: '1.5rem', display: 'flex', gap: '1rem' }}>
+                    <button
+                        className="btn btn-primary"
+                        style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                        onClick={() => window.open(window.location.protocol + '//' + window.location.hostname + ':3000/api/stats/export/excel', '_blank')}
+                    >
+                        <FileSpreadsheet size={18} /> Exportar Excel
+                    </button>
+                    <button
+                        className="btn btn-ghost"
+                        style={{ display: 'flex', alignItems: 'center', gap: '8px', border: '1px solid #334155' }}
+                        onClick={() => window.open(window.location.protocol + '//' + window.location.hostname + ':3000/api/stats/export/pdf', '_blank')}
+                    >
+                        <Download size={18} /> Exportar PDF
+                    </button>
+                </div>
             </div>
         </div>
     );

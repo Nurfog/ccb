@@ -42,12 +42,18 @@ Plataforma empresarial multitenancy para gestión de datos y análisis de Machin
 - **Dark Mode**: Tema oscuro profesional por defecto
 - **Animaciones Suaves**: Micro-interacciones para mejor UX
 
-### Machine Learning (Nuevo)
+### Machine Learning
 - **PyTorch + CUDA**: Aceleración GPU para entrenamiento rápido
 - **Microservicio ML**: Arquitectura desacoplada y escalable
-- **API de Entrenamiento**: Endpoints para entrenar modelos personalizados
-- **API de Predicciones**: Inferencia en tiempo real
-- **Soporte Multi-Modelo**: Regresión, clasificación, clustering
+- **API de Entrenamiento**: Endpoints para entrenar modelos personalizados con soporte para datos categóricos y fechas
+- **API de Predicciones**: Inferencia en tiempo real con persistencia de modelos
+- **Predicciones UI**: Interfaz dinámica para realizar predicciones sobre modelos entrenados
+
+### Características Avanzadas (Roadmap)
+- **Sistema de Notificaciones**: Alertas en tiempo real para eventos del sistema (ej. entrenamiento completado)
+- **Exportación de Reportes**: Descarga de reportes en formato **PDF** y **Excel (XLSX)**
+- **Logs de Auditoría**: Registro detallado de acciones críticas para cumplimiento y seguridad
+- **Seguridad Administrador**: Panel de visualización de eventos de sistema para usuarios Root
 
 ## 🚀 Inicio Rápido
 
@@ -82,9 +88,9 @@ Plataforma empresarial multitenancy para gestión de datos y análisis de Machin
 
    Esto iniciará:
    - **Base de Datos** (PostgreSQL 16 con pgvector) en puerto `5432`
-   - **Backend** (Rust/Axum) en puerto `3000`
+   - **Backend** (Rust/Axum) en puerto `3004` (mapeado de interno 3000)
    - **Frontend** (React/Nginx) en puerto `8080`
-   - **ML Service** (Python/PyTorch) en puerto `8000`
+   - **ML Service** (Python/PyTorch) en puerto `8004` (mapeado de interno 8000)
 
    > **Nota GPU/CPU**: Por defecto, el ML Service usa CPU (compatible con cualquier máquina).
    > 
@@ -375,14 +381,7 @@ docker compose up -d --build frontend
 
 ## 🚧 Roadmap
 
-- [ ] Gráficos y visualizaciones de datos en dashboard
-- [ ] Procesamiento de ML (entrenamiento de modelos)
-- [ ] API de predicciones
-- [ ] Sistema de notificaciones
-- [ ] Exportación de reportes (PDF/Excel)
-- [ ] Logs de auditoría
-- [ ] Two-Factor Authentication (2FA)
-- [ ] Soporte multi-idioma (i18n)
+Para ver el roadmap detallado y futuras implementaciones, consultar [ROADMAP.md](./ROADMAP.md).
 
 ## 📝 Licencia
 
@@ -403,6 +402,6 @@ Para reportar bugs o solicitar funcionalidades, crear un issue en el repositorio
 
 ---
 
-**Última actualización:** Diciembre 2024
+**Última actualización:** Diciembre 2025
 
 Desarrollado con ❤️ usando Rust y React

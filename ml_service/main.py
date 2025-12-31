@@ -2,8 +2,14 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import torch
 import os
+import json
+import uuid
 from typing import List, Dict, Any
 import logging
+import psycopg2
+from datetime import datetime
+import pandas as pd
+from trainers.regression import RegressionTrainer, SimpleRegressionModel
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -12,247 +18,223 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="CCB ML Service", version="1.0.0")
 
 # Configurar dispositivo (GPU/CPU)
-# Prioridad: 1. Variable de entorno ML_DEVICE, 2. Autodetección
 ML_DEVICE_ENV = os.getenv("ML_DEVICE", "auto").lower()
 
 if ML_DEVICE_ENV == "auto":
     CUDA_AVAILABLE = torch.cuda.is_available()
     DEVICE = torch.device("cuda" if CUDA_AVAILABLE else "cpu")
-    logger.info("🔍 Modo autodetección activado")
 elif ML_DEVICE_ENV == "cuda":
-    if torch.cuda.is_available():
-        CUDA_AVAILABLE = True
-        DEVICE = torch.device("cuda")
-        logger.info("🎯 Forzando uso de GPU (configuración manual)")
-    else:
-        logger.warning("⚠ GPU solicitada pero no disponible, usando CPU")
-        CUDA_AVAILABLE = False
-        DEVICE = torch.device("cpu")
-elif ML_DEVICE_ENV == "cpu":
-    CUDA_AVAILABLE = False
+    DEVICE = torch.device("cuda")
+    CUDA_AVAILABLE = True
+else:
     DEVICE = torch.device("cpu")
-    logger.info("🎯 Forzando uso de CPU (configuración manual)")
-else:
-    logger.warning(f"⚠ ML_DEVICE inválido '{ML_DEVICE_ENV}', usando autodetección")
-    CUDA_AVAILABLE = torch.cuda.is_available()
-    DEVICE = torch.device("cuda" if CUDA_AVAILABLE else "cpu")
+    CUDA_AVAILABLE = False
 
-if CUDA_AVAILABLE:
-    logger.info(f"✓ GPU Detectada: {torch.cuda.get_device_name(0)}")
-    logger.info(f"✓ CUDA Version: {torch.version.cuda}")
-    logger.info(f"✓ GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
-else:
-    logger.info("ℹ Usando CPU para procesamiento ML")
+logger.info(f"Usando dispositivo: {DEVICE}")
 
-# Modelos
+# DB Settings
+DB_URL = os.getenv("DATABASE_URL", "postgres://user:password@db:5432/ml_db")
+
+# Pydantic Models
 class TrainRequest(BaseModel):
     schema_id: str
-    model_type: str = "regression"  # regression, classification, clustering
+    model_type: str = "regression"
     hyperparameters: Dict[str, Any] = {}
 
 class PredictRequest(BaseModel):
     model_id: str
     data: List[Dict[str, Any]]
 
-class ModelInfo(BaseModel):
-    id: str
-    type: str
-    status: str
-    accuracy: float = None
-    created_at: str
-
 @app.get("/")
 async def root():
-    return {
-        "service": "CCB ML Service",
-        "status": "operational",
-        "cuda_available": CUDA_AVAILABLE,
-        "device": str(DEVICE),
-        "gpu_name": torch.cuda.get_device_name(0) if CUDA_AVAILABLE else None
-    }
+    return {"service": "CCB ML Service", "cuda": CUDA_AVAILABLE, "device": str(DEVICE)}
 
 @app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    gpu_info = {}
-    if CUDA_AVAILABLE:
-        gpu_info = {
-            "name": torch.cuda.get_device_name(0),
-            "memory_allocated": f"{torch.cuda.memory_allocated(0) / 1e9:.2f} GB",
-            "memory_reserved": f"{torch.cuda.memory_reserved(0) / 1e9:.2f} GB",
-        }
-    
-    return {
-        "status": "healthy",
-        "cuda_available": CUDA_AVAILABLE,
-        "gpu": gpu_info,
-        "pytorch_version": torch.__version__
-    }
+async def health():
+    return {"status": "healthy", "device": str(DEVICE)}
 
 @app.post("/train")
 async def train_model(request: TrainRequest):
-    """
-    Entrena un modelo de ML con los datos del schema especificado
-    """
-    import psycopg2
-    from trainers.regression import RegressionTrainer
-    import json
-    import uuid
-    from datetime import datetime
-    
     try:
-        logger.info(f"Iniciando entrenamiento: {request.model_type} para schema {request.schema_id}")
-        
-        # Conectar a PostgreSQL
-        db_url = os.getenv("DATABASE_URL", "postgres://user:password@db:5432/ml_db")
-        conn = psycopg2.connect(db_url)
+        conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
         
-        # 1. Obtener datos del schema
-        cursor.execute("""
-            SELECT data FROM ml_data 
-            WHERE schema_id = %s
-            LIMIT 10000
-        """, (request.schema_id,))
-        
-        rows = cursor.fetchall()
-        if not rows:
-            raise HTTPException(status_code=404, detail="No se encontraron datos para ese schema")
-        
-        # Convertir JSONB a dict
-        data = [row[0] for row in rows]
-        logger.info(f"Cargadas {len(data)} filas de datos")
-        
-        # 2. Obtener información del schema (columnas)
-        cursor.execute("""
-            SELECT columns FROM ml_schemas 
-            WHERE id = %s
-        """, (request.schema_id,))
-        
+        # 1. Obtener datos y client_id
+        cursor.execute("SELECT client_id, columns FROM ml_schemas WHERE id = %s", (request.schema_id,))
         schema_info = cursor.fetchone()
         if not schema_info:
             raise HTTPException(status_code=404, detail="Schema no encontrado")
         
-        columns = schema_info[0]  # Lista de nombres de columnas
-        logger.info(f"Columnas disponibles: {columns}")
+        client_id, columns = schema_info
         
-        # 3. Determinar target column (hiperparámetro o última columna)
-        target_column = request.hyperparameters.get("target_column")
-        if not target_column:
-            # Usar última columna por defecto
-            target_column = columns[-1] if isinstance(columns, list) else list(columns.keys())[-1]
+        cursor.execute("SELECT data FROM ml_data WHERE schema_id = %s LIMIT 10000", (request.schema_id,))
+        data = [row[0] for row in cursor.fetchall()]
         
-        logger.info(f"Columna objetivo: {target_column}")
+        if not data:
+            raise HTTPException(status_code=404, detail="No hay datos")
+
+        target_column = request.hyperparameters.get("target_column") or columns[-1]
         
-        # 4. Entrenar modelo
+        # 2. Entrenar
         if request.model_type == "regression":
             trainer = RegressionTrainer(DEVICE)
-            
             X, y, feature_names = trainer.prepare_data(data, target_column)
             
-            # Hiperparámetros
-            epochs = request.hyperparameters.get("epochs", 100)
-            learning_rate = request.hyperparameters.get("learning_rate", 0.001)
-            batch_size = request.hyperparameters.get("batch_size", 32)
+            epochs = int(request.hyperparameters.get("epochs", 100))
+            lr = float(request.hyperparameters.get("learning_rate", 0.001))
+            bs = int(request.hyperparameters.get("batch_size", 32))
             
-            model, metrics = trainer.train(
-                X, y,
-                epochs=epochs,
-                learning_rate=learning_rate,
-                batch_size=batch_size
-            )
+            model, metrics = trainer.train(X, y, epochs=epochs, learning_rate=lr, batch_size=bs)
             
-            # 5. Guardar modelo
+            # 3. Guardar en disco
             model_id = str(uuid.uuid4())
             model_path = f"/app/models/{model_id}.pt"
-            
             os.makedirs("/app/models", exist_ok=True)
+            
             torch.save({
                 'model_state': model.state_dict(),
                 'feature_names': feature_names,
                 'target_column': target_column,
-                'metrics': metrics,
-                'hyperparameters': {
-                    'epochs': epochs,
-                    'learning_rate': learning_rate,
-                    'batch_size': batch_size
-                }
+                'metadata': trainer.feature_metadata
             }, model_path)
             
-            logger.info(f"Modelo guardado: {model_path}")
-            
-            # 6. Registrar modelo en base de datos (opcional, por ahora solo log)
+            # 4. Registrar en DB
+            cursor.execute("""
+                INSERT INTO ml_models (id, schema_id, client_id, model_type, model_path, metrics, feature_metadata, target_column)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                model_id, request.schema_id, client_id, request.model_type, 
+                model_path, json.dumps(metrics), json.dumps(trainer.feature_metadata), target_column
+            ))
+            conn.commit()
             
             cursor.close()
             conn.close()
             
-            return {
-                "model_id": model_id,
-                "status": "training_complete",
-                "message": "Modelo entrenado exitosamente",
-                "device": str(DEVICE),
-                "metrics": metrics,
-                "feature_names": feature_names,
-                "target_column": target_column
-            }
-        else:
-            raise HTTPException(status_code=400, detail=f"Tipo de modelo '{request.model_type}' no soportado aún")
-    
-    except psycopg2.Error as e:
-        logger.error(f"Error de base de datos: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error de base de datos: {str(e)}")
+            return {"model_id": model_id, "metrics": metrics, "device": str(DEVICE)}
+        
+        raise HTTPException(status_code=400, detail="Tipo de modelo no soportado")
     except Exception as e:
-        logger.error(f"Error en entrenamiento: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/predict")
 async def predict(request: PredictRequest):
-    """
-    Realiza predicciones usando un modelo entrenado
-    """
     try:
-        # TODO: Implementar predicción real
-        # 1. Cargar modelo desde disco/DB
-        # 2. Preprocesar input data
-        # 3. Ejecutar inferencia
-        # 4. Post-procesar resultados
+        conn = psycopg2.connect(DB_URL)
+        cursor = conn.cursor()
+        cursor.execute("SELECT model_path, feature_metadata, target_column FROM ml_models WHERE id = %s", (request.model_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Modelo no encontrado")
         
-        logger.info(f"Predicción solicitada para modelo: {request.model_id}")
+        model_path, metadata, target_col = row
+        checkpoint = torch.load(model_path, map_location=DEVICE)
         
-        # Placeholder response
-        return {
-            "predictions": [{"value": 0.0} for _ in request.data],
-            "model_id": request.model_id,
-            "device": str(DEVICE)
-        }
-    
+        # Reconstruir modelo
+        feature_names = checkpoint['feature_names']
+        input_dim = len(feature_names)
+        model = SimpleRegressionModel(input_dim).to(DEVICE)
+        model.load_state_dict(checkpoint['model_state'])
+        model.eval()
+        
+        # Preprocesar input
+        df = pd.DataFrame(request.data)
+        
+        # Aplicar mismas transformaciones que en el entrenamiento
+        for col, meta in metadata.items():
+            if col == 'stats' or col not in df.columns: continue
+            if meta['type'] == 'categorical':
+                uniques = meta['uniques']
+                df[col] = df[col].apply(lambda x: uniques.index(x) if x in uniques else -1)
+        
+        # Fechas si existen
+        for col in df.columns:
+            if 'fecha' in col.lower() or 'date' in col.lower():
+                dates = pd.to_datetime(df[col], errors='coerce')
+                df[f'{col}_month'] = dates.dt.month.fillna(1)
+                df[f'{col}_day'] = dates.dt.dayofweek.fillna(0)
+
+        # Seleccionar features y normalizar
+        stats = metadata['stats']
+        X_df = df[feature_names].astype('float32')
+        for col in feature_names:
+            mean = stats['mean'][col]
+            std = stats['std'][col]
+            X_df[col] = (X_df[col] - mean) / (std + 1e-8)
+            
+        X_tensor = torch.from_numpy(X_df.values).to(DEVICE)
+        
+        with torch.no_grad():
+            preds = model(X_tensor).cpu().numpy().flatten().tolist()
+            
+        cursor.close()
+        conn.close()
+        return {"predictions": preds, "model_id": request.model_id}
+        
     except Exception as e:
-        logger.error(f"Error en predicción: {str(e)}")
+        logger.error(f"Error predicción: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/models")
-async def list_models():
-    """
-    Lista todos los modelos entrenados
-    """
-    # TODO: Consultar base de datos de modelos
-    return {
-        "models": [],
-        "count": 0
-    }
+async def list_models(client_id: str = None):
+    try:
+        conn = psycopg2.connect(DB_URL)
+        cursor = conn.cursor()
+        if client_id:
+            cursor.execute("SELECT id, schema_id, model_type, metrics, target_column, created_at FROM ml_models WHERE client_id = %s ORDER BY created_at DESC", (client_id,))
+        else:
+            cursor.execute("SELECT id, schema_id, model_type, metrics, target_column, created_at FROM ml_models ORDER BY created_at DESC")
+        
+        models = []
+        for r in cursor.fetchall():
+            models.append({
+                "id": r[0], "schema_id": r[1], "type": r[2], 
+                "metrics": r[3], "target": r[4], "created_at": r[5].isoformat()
+            })
+        cursor.close()
+        conn.close()
+        return {"models": models}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/models/{model_id}")
+async def get_model_details(model_id: str):
+    try:
+        conn = psycopg2.connect(DB_URL)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, schema_id, model_type, metrics, feature_metadata, target_column, created_at FROM ml_models WHERE id = %s", (model_id,))
+        r = cursor.fetchone()
+        if not r:
+            raise HTTPException(status_code=404, detail="Modelo no encontrado")
+        
+        res = {
+            "id": r[0], "schema_id": r[1], "type": r[2], 
+            "metrics": r[3], "feature_metadata": r[4], "target": r[5], "created_at": r[6].isoformat()
+        }
+        cursor.close()
+        conn.close()
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/models/{model_id}")
 async def delete_model(model_id: str):
-    """
-    Elimina un modelo entrenado
-    """
-    # TODO: Eliminar modelo de disco y DB
-    return {
-        "message": f"Modelo {model_id} eliminado",
-        "success": True
-    }
+    try:
+        conn = psycopg2.connect(DB_URL)
+        cursor = conn.cursor()
+        cursor.execute("SELECT model_path FROM ml_models WHERE id = %s", (model_id,))
+        row = cursor.fetchone()
+        if row and os.path.exists(row[0]):
+            os.remove(row[0])
+        
+        cursor.execute("DELETE FROM ml_models WHERE id = %s", (model_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn

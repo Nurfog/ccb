@@ -7,6 +7,8 @@ import UploadData from './pages/UploadData';
 import CreateClient from './pages/CreateClient';
 import CompanyUsers from './pages/CompanyUsers';
 import TrainModel from './pages/TrainModel';
+import Predictions from './pages/Predictions';
+import AuditLogs from './pages/AuditLogs';
 
 // Componente para proteger rutas
 const PrivateRoute = ({ children, roles = [] }) => {
@@ -78,6 +80,24 @@ function AppRoutes() {
         element={
           <PrivateRoute>
             <TrainModel />
+          </PrivateRoute>
+        }
+      />
+
+      <Route
+        path="/predictions"
+        element={
+          <PrivateRoute>
+            <Predictions />
+          </PrivateRoute>
+        }
+      />
+
+      <Route
+        path="/admin/logs"
+        element={
+          <PrivateRoute roles={['root']}>
+            <AuditLogs />
           </PrivateRoute>
         }
       />

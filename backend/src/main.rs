@@ -3,17 +3,16 @@ use argon2::{
     Argon2,
 };
 use axum::{
-    extract::{FromRequestParts, Multipart, State},
+    extract::{FromRequestParts, Multipart, Path, State},
     http::{header, request::Parts, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, RequestPartsExt, Router,
 };
 use axum_extra::{
     headers::{authorization::Bearer, Authorization},
     TypedHeader,
 };
-use calamine::Reader;
 use chrono::{DateTime, Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
@@ -78,9 +77,21 @@ async fn main() {
         .route("/api/stats", get(get_stats))
         .route("/api/analytics", get(get_analytics))
         .route("/api/ml/train", post(train_ml_model))
+        .route("/api/ml/models", get(get_ml_models))
+        .route("/api/ml/models/:id", get(get_ml_model_details))
+        .route("/api/ml/predict", post(predict_ml_model))
+        .route("/api/ml/models/:id", delete(delete_ml_model))
+        .route("/api/stats/charts", get(get_dashboard_charts))
         .route("/api/users/me", get(get_me))
         .route("/api/upload", post(upload_dataset))
-        .layer(CorsLayer::permissive()) // Permitir CORS para desarrollo frontend
+        // Notificaciones
+        .route("/api/notifications", get(get_notifications))
+        .route("/api/notifications/read/:id", post(mark_notification_read))
+        // Auditoría e Informes
+        .route("/api/admin/audit-logs", get(get_audit_logs))
+        .route("/api/stats/export/excel", get(export_stats_excel))
+        .route("/api/stats/export/pdf", get(export_stats_pdf))
+        .layer(CorsLayer::permissive())
         .with_state(app_state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
@@ -411,6 +422,9 @@ async fn login(
     )
     .map_err(|_| AppError::InternalError)?;
 
+    // Auditoría: Login exitoso
+    let _ = log_audit(&state.db_pool, Some(user.id), "login", None, None, None).await;
+
     Ok(Json(LoginResponse {
         token,
         user: UserResponse::from(user),
@@ -544,23 +558,23 @@ struct DashboardStats {
     total_datasets: i64,
 }
 
-async fn get_stats(
-    State(state): State<AppState>,
-    auth_user: AuthUser,
-) -> Result<Json<DashboardStats>, AppError> {
+async fn get_stats_internal(
+    pool: &PgPool,
+    auth_user: &AuthUser,
+) -> Result<DashboardStats, AppError> {
     let total_clients = if auth_user.role == UserRole::Root {
         sqlx::query_scalar!("SELECT COUNT(*) as count FROM clients")
-            .fetch_one(&state.db_pool)
+            .fetch_one(pool)
             .await
             .map_err(AppError::DatabaseError)?
             .unwrap_or(0)
     } else {
-        1 // Company admin solo ve su empresa
+        1
     };
 
     let total_users = if auth_user.role == UserRole::Root {
         sqlx::query_scalar!("SELECT COUNT(*) as count FROM users")
-            .fetch_one(&state.db_pool)
+            .fetch_one(pool)
             .await
             .map_err(AppError::DatabaseError)?
             .unwrap_or(0)
@@ -572,17 +586,17 @@ async fn get_stats(
             "SELECT COUNT(*) as count FROM users WHERE client_id = $1",
             client_id
         )
-        .fetch_one(&state.db_pool)
+        .fetch_one(pool)
         .await
         .map_err(AppError::DatabaseError)?
         .unwrap_or(0)
     } else {
-        1 // Usuario estándar solo se ve a sí mismo
+        1
     };
 
     let active_users = if auth_user.role == UserRole::Root {
         sqlx::query_scalar!("SELECT COUNT(*) as count FROM users WHERE status = 'active'")
-            .fetch_one(&state.db_pool)
+            .fetch_one(pool)
             .await
             .map_err(AppError::DatabaseError)?
             .unwrap_or(0)
@@ -594,7 +608,7 @@ async fn get_stats(
             "SELECT COUNT(*) as count FROM users WHERE client_id = $1 AND status = 'active'",
             client_id
         )
-        .fetch_one(&state.db_pool)
+        .fetch_one(pool)
         .await
         .map_err(AppError::DatabaseError)?
         .unwrap_or(0)
@@ -602,10 +616,9 @@ async fn get_stats(
         1
     };
 
-    // Contar datasets/schemas por cliente
     let total_datasets = if auth_user.role == UserRole::Root {
         sqlx::query_scalar!("SELECT COUNT(DISTINCT schema_name) as count FROM ml_schemas")
-            .fetch_one(&state.db_pool)
+            .fetch_one(pool)
             .await
             .map_err(AppError::DatabaseError)?
             .unwrap_or(0)
@@ -617,17 +630,119 @@ async fn get_stats(
             "SELECT COUNT(DISTINCT schema_name) as count FROM ml_schemas WHERE client_id = $1",
             client_id
         )
-        .fetch_one(&state.db_pool)
+        .fetch_one(pool)
         .await
         .map_err(AppError::DatabaseError)?
         .unwrap_or(0)
     };
 
-    Ok(Json(DashboardStats {
+    Ok(DashboardStats {
         total_clients,
         total_users,
         active_users,
         total_datasets,
+    })
+}
+
+async fn get_stats(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+) -> Result<Json<DashboardStats>, AppError> {
+    let stats = get_stats_internal(&state.db_pool, &auth_user).await?;
+    Ok(Json(stats))
+}
+
+#[derive(Serialize)]
+struct ChartPoint {
+    name: String,
+    value: i64,
+}
+
+#[derive(Serialize)]
+struct DashboardCharts {
+    user_growth: Vec<ChartPoint>,
+    dataset_growth: Vec<ChartPoint>,
+}
+
+async fn get_dashboard_charts(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+) -> Result<Json<DashboardCharts>, AppError> {
+    // 1. Crecimiento de Usuarios (Últimos 6 meses)
+    let user_growth = if auth_user.role == UserRole::Root {
+        sqlx::query_as!(
+            ChartPoint,
+            r#"
+            SELECT to_char(created_at, 'Mon') as "name!", COUNT(*)::bigint as "value!"
+            FROM users
+            WHERE created_at > NOW() - INTERVAL '6 months'
+            GROUP BY 1, date_trunc('month', created_at)
+            ORDER BY date_trunc('month', created_at)
+            "#
+        )
+        .fetch_all(&state.db_pool)
+        .await
+        .map_err(AppError::DatabaseError)?
+    } else if auth_user.role == UserRole::CompanyAdmin {
+        let client_id = auth_user
+            .client_id
+            .ok_or(AppError::Forbidden("Admin sin empresa".into()))?;
+        sqlx::query_as!(
+            ChartPoint,
+            r#"
+            SELECT to_char(created_at, 'Mon') as "name!", COUNT(*)::bigint as "value!"
+            FROM users
+            WHERE client_id = $1 AND created_at > NOW() - INTERVAL '6 months'
+            GROUP BY 1, date_trunc('month', created_at)
+            ORDER BY date_trunc('month', created_at)
+            "#,
+            client_id
+        )
+        .fetch_all(&state.db_pool)
+        .await
+        .map_err(AppError::DatabaseError)?
+    } else {
+        vec![]
+    };
+
+    // 2. Datasets subidos (Últimos 6 meses)
+    let dataset_growth = if auth_user.role == UserRole::Root {
+        sqlx::query_as!(
+            ChartPoint,
+            r#"
+            SELECT to_char(created_at, 'Mon') as "name!", COUNT(*)::bigint as "value!"
+            FROM ml_schemas
+            WHERE created_at > NOW() - INTERVAL '6 months'
+            GROUP BY 1, date_trunc('month', created_at)
+            ORDER BY date_trunc('month', created_at)
+            "#
+        )
+        .fetch_all(&state.db_pool)
+        .await
+        .map_err(AppError::DatabaseError)?
+    } else {
+        let client_id = auth_user
+            .client_id
+            .ok_or(AppError::Forbidden("Usuario sin empresa".into()))?;
+        sqlx::query_as!(
+            ChartPoint,
+            r#"
+            SELECT to_char(created_at, 'Mon') as "name!", COUNT(*)::bigint as "value!"
+            FROM ml_schemas
+            WHERE client_id = $1 AND created_at > NOW() - INTERVAL '6 months'
+            GROUP BY 1, date_trunc('month', created_at)
+            ORDER BY date_trunc('month', created_at)
+            "#,
+            client_id
+        )
+        .fetch_all(&state.db_pool)
+        .await
+        .map_err(AppError::DatabaseError)?
+    };
+
+    Ok(Json(DashboardCharts {
+        user_growth,
+        dataset_growth,
     }))
 }
 
@@ -709,17 +824,363 @@ async fn get_analytics(
     }))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct TrainMLRequest {
-    schema_id: String,
+    schema_id: uuid::Uuid,
     target_column: Option<String>,
     epochs: Option<i32>,
     learning_rate: Option<f64>,
     batch_size: Option<i32>,
 }
 
-async fn train_ml_model(
+#[derive(Deserialize, Serialize)]
+struct PredictMLRequest {
+    model_id: uuid::Uuid,
+    data: Vec<serde_json::Value>,
+}
+
+async fn get_ml_models(
     State(_state): State<AppState>,
+    auth_user: AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let mut url = String::from("http://ccb_ml_service:8000/models");
+    if auth_user.role != UserRole::Root {
+        if let Some(client_id) = auth_user.client_id {
+            url.push_str(&format!("?client_id={}", client_id));
+        }
+    }
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|_| AppError::InternalError)?;
+
+    let result: serde_json::Value = response.json().await.map_err(|_| AppError::InternalError)?;
+    Ok(Json(result))
+}
+
+async fn predict_ml_model(
+    State(_state): State<AppState>,
+    _auth_user: AuthUser,
+    Json(payload): Json<PredictMLRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let client = reqwest::Client::new();
+    let response = client
+        .post("http://ccb_ml_service:8000/predict")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|_| AppError::InternalError)?;
+
+    if !response.status().is_success() {
+        return Err(AppError::BadRequest("Error en el servicio de ML".into()));
+    }
+
+    let result: serde_json::Value = response.json().await.map_err(|_| AppError::InternalError)?;
+    Ok(Json(result))
+}
+
+async fn get_ml_model_details(
+    _auth_user: AuthUser,
+    Path(model_id): Path<uuid::Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&format!("http://ccb_ml_service:8000/models/{}", model_id))
+        .send()
+        .await
+        .map_err(|_| AppError::InternalError)?;
+
+    let result: serde_json::Value = response.json().await.map_err(|_| AppError::InternalError)?;
+    Ok(Json(result))
+}
+
+// --- Handlers de Notificaciones ---
+
+#[derive(Serialize)]
+struct Notification {
+    id: uuid::Uuid,
+    #[serde(rename = "type")]
+    notif_type: String,
+    title: String,
+    message: String,
+    is_read: bool,
+    created_at: DateTime<Utc>,
+}
+
+async fn get_notifications(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+) -> Result<Json<Vec<Notification>>, AppError> {
+    let notifications: Vec<Notification> = sqlx::query_as!(
+        Notification,
+        r#"SELECT id, type as "notif_type!", title, message, is_read as "is_read!", created_at as "created_at!" FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50"#,
+        auth_user.id
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(AppError::DatabaseError)?;
+
+    Ok(Json(notifications))
+}
+
+async fn mark_notification_read(
+    State(state): State<AppState>,
+    _auth_user: AuthUser,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<StatusCode, AppError> {
+    sqlx::query!("UPDATE notifications SET is_read = true WHERE id = $1", id)
+        .execute(&state.db_pool)
+        .await
+        .map_err(|_| AppError::InternalError)?;
+
+    Ok(StatusCode::OK)
+}
+
+// Helper para crear notificaciones
+async fn create_notification(
+    pool: &PgPool,
+    user_id: uuid::Uuid,
+    notif_type: &str,
+    title: &str,
+    message: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        "INSERT INTO notifications (user_id, type, title, message) VALUES ($1, $2, $3, $4)",
+        user_id,
+        notif_type,
+        title,
+        message
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+// --- Handlers de Auditoría ---
+
+#[derive(Serialize)]
+struct AuditLog {
+    id: uuid::Uuid,
+    user_email: Option<String>,
+    action: String,
+    target_type: Option<String>,
+    target_id: Option<uuid::Uuid>,
+    details: Option<Value>,
+    ip_address: Option<String>,
+    created_at: DateTime<Utc>,
+}
+
+async fn get_audit_logs(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+) -> Result<Json<Vec<AuditLog>>, AppError> {
+    if auth_user.role != UserRole::Root {
+        return Err(AppError::Forbidden(
+            "Solo root puede ver logs de auditoría".into(),
+        ));
+    }
+
+    let logs: Vec<AuditLog> = sqlx::query_as!(
+        AuditLog,
+        r#"
+        SELECT 
+            al.id, 
+            u.email as user_email, 
+            al.action, 
+            al.target_type, 
+            al.target_id, 
+            al.details, 
+            al.ip_address, 
+            al.created_at as "created_at!"
+        FROM audit_logs al
+        LEFT JOIN users u ON al.user_id = u.id
+        ORDER BY al.created_at DESC
+        LIMIT 100
+        "#
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(AppError::DatabaseError)?;
+
+    Ok(Json(logs))
+}
+
+async fn log_audit(
+    pool: &PgPool,
+    user_id: Option<uuid::Uuid>,
+    action: &str,
+    target_type: Option<&str>,
+    target_id: Option<uuid::Uuid>,
+    details: Option<Value>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        "INSERT INTO audit_logs (user_id, action, target_type, target_id, details) VALUES ($1, $2, $3, $4, $5)",
+        user_id,
+        action,
+        target_type,
+        target_id,
+        details
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+// --- Handlers de Exportación (Placeholders por ahora) ---
+
+async fn export_stats_excel(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+) -> Result<Response, AppError> {
+    use rust_xlsxwriter::Workbook;
+
+    let stats = get_stats_internal(&state.db_pool, &auth_user).await?;
+
+    let mut workbook = Workbook::new();
+    let worksheet = workbook.add_worksheet();
+
+    worksheet
+        .write(0, 0, "Métrica")
+        .map_err(|_| AppError::InternalError)?;
+    worksheet
+        .write(0, 1, "Valor")
+        .map_err(|_| AppError::InternalError)?;
+
+    worksheet
+        .write(1, 0, "Total Clientes")
+        .map_err(|_| AppError::InternalError)?;
+    worksheet
+        .write(1, 1, stats.total_clients as f64)
+        .map_err(|_| AppError::InternalError)?;
+
+    worksheet
+        .write(2, 0, "Total Usuarios")
+        .map_err(|_| AppError::InternalError)?;
+    worksheet
+        .write(2, 1, stats.total_users as f64)
+        .map_err(|_| AppError::InternalError)?;
+
+    worksheet
+        .write(3, 0, "Usuarios Activos")
+        .map_err(|_| AppError::InternalError)?;
+    worksheet
+        .write(3, 1, stats.active_users as f64)
+        .map_err(|_| AppError::InternalError)?;
+
+    worksheet
+        .write(4, 0, "Total Datasets")
+        .map_err(|_| AppError::InternalError)?;
+    worksheet
+        .write(4, 1, stats.total_datasets as f64)
+        .map_err(|_| AppError::InternalError)?;
+
+    let buf = workbook
+        .save_to_buffer()
+        .map_err(|_| AppError::InternalError)?;
+
+    Ok((
+        StatusCode::OK,
+        [
+            (
+                header::CONTENT_TYPE,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"stats.xlsx\"",
+            ),
+        ],
+        buf,
+    )
+        .into_response())
+}
+
+async fn export_stats_pdf(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+) -> Result<Response, AppError> {
+    use genpdf::elements;
+    use genpdf::style;
+
+    let stats = get_stats_internal(&state.db_pool, &auth_user).await?;
+
+    let font_family =
+        genpdf::fonts::from_files("/usr/share/fonts/truetype/dejavu", "DejaVuSans", None)
+            .map_err(|_| AppError::InternalError)?;
+
+    let mut doc = genpdf::Document::new(font_family);
+    doc.set_title("Dashboard Stats");
+
+    let mut decorator = genpdf::SimplePageDecorator::new();
+    decorator.set_margins(10);
+    doc.set_page_decorator(decorator);
+
+    use genpdf::Element;
+    doc.push(
+        elements::Paragraph::new("Reporte de Estadísticas")
+            .styled(style::Color::Rgb(0, 0, 0))
+            .styled(style::Effect::Bold),
+    );
+
+    doc.push(elements::Break::new(1.0));
+    doc.push(elements::Text::new(format!(
+        "Total Clientes: {}",
+        stats.total_clients
+    )));
+    doc.push(elements::Text::new(format!(
+        "Total Usuarios: {}",
+        stats.total_users
+    )));
+    doc.push(elements::Text::new(format!(
+        "Usuarios Activos: {}",
+        stats.active_users
+    )));
+    doc.push(elements::Text::new(format!(
+        "Total Datasets: {}",
+        stats.total_datasets
+    )));
+
+    let mut buf = Vec::new();
+    doc.render(&mut buf).map_err(|_| AppError::InternalError)?;
+
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/pdf"),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"stats.pdf\"",
+            ),
+        ],
+        buf,
+    )
+        .into_response())
+}
+async fn delete_ml_model(
+    State(_state): State<AppState>,
+    auth_user: AuthUser,
+    Path(model_id): Path<uuid::Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if auth_user.role != UserRole::Root && auth_user.role != UserRole::CompanyAdmin {
+        return Err(AppError::Forbidden("No tienes permisos suficientes".into()));
+    }
+
+    let client = reqwest::Client::new();
+    let response = client
+        .delete(&format!("http://ccb_ml_service:8000/models/{}", model_id))
+        .send()
+        .await
+        .map_err(|_| AppError::InternalError)?;
+
+    let result: serde_json::Value = response.json().await.map_err(|_| AppError::InternalError)?;
+    Ok(Json(result))
+}
+
+async fn train_ml_model(
+    State(state): State<AppState>,
     auth_user: AuthUser,
     Json(payload): Json<TrainMLRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -733,10 +1194,10 @@ async fn train_ml_model(
     // Preparar request para ML Service
     let mut hyperparameters = serde_json::Map::new();
 
-    if let Some(target) = payload.target_column {
+    if let Some(ref target) = payload.target_column {
         hyperparameters.insert(
             "target_column".to_string(),
-            serde_json::Value::String(target),
+            serde_json::Value::String(target.to_string()),
         );
     }
     if let Some(epochs) = payload.epochs {
@@ -770,7 +1231,7 @@ async fn train_ml_model(
         .json(&ml_request)
         .send()
         .await
-        .map_err(|e| AppError::InternalError)?;
+        .map_err(|_e| AppError::InternalError)?;
 
     if !response.status().is_success() {
         let error_text = response
@@ -784,6 +1245,32 @@ async fn train_ml_model(
     }
 
     let result: serde_json::Value = response.json().await.map_err(|_| AppError::InternalError)?;
+
+    // Auditoría e Notificación
+    let model_id_str = result.get("model_id").and_then(|v| v.as_str());
+    let target_name = payload.target_column.as_deref().unwrap_or("Total");
+
+    let _ = log_audit(
+        &state.db_pool,
+        Some(auth_user.id),
+        "train_model",
+        Some("model"),
+        model_id_str.and_then(|s| uuid::Uuid::parse_str(s).ok()),
+        Some(json!({"schema_id": payload.schema_id, "target": target_name})),
+    )
+    .await;
+
+    let _ = create_notification(
+        &state.db_pool,
+        auth_user.id,
+        "success",
+        "Entrenamiento completado",
+        &format!(
+            "El modelo para '{}' se ha entrenado exitosamente.",
+            target_name
+        ),
+    )
+    .await;
 
     Ok(Json(result))
 }

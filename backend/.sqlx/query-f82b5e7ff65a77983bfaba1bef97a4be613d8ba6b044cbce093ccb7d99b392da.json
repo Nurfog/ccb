@@ -1,15 +1,20 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        INSERT INTO clients (name, client_type, contract_expires_at)\n        VALUES ($1, $2::client_type_enum, $3)\n        RETURNING name, client_type as \"client_type: _\", contract_expires_at, created_at\n        ",
+  "query": "\n        INSERT INTO clients (name, client_type, contract_expires_at)\n        VALUES ($1, $2::client_type_enum, $3)\n        RETURNING id, name, client_type as \"client_type: _\", contract_expires_at, created_at\n        ",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
         "name": "name",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 1,
+        "ordinal": 2,
         "name": "client_type: _",
         "type_info": {
           "Custom": {
@@ -24,12 +29,12 @@
         }
       },
       {
-        "ordinal": 2,
+        "ordinal": 3,
         "name": "contract_expires_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 3,
+        "ordinal": 4,
         "name": "created_at",
         "type_info": "Timestamptz"
       }
@@ -54,9 +59,10 @@
     "nullable": [
       false,
       false,
+      false,
       true,
       false
     ]
   },
-  "hash": "bf9d9f726e0f927f9b6b614ab4f85d0d38a32445b5feefea43225df52fcec27e"
+  "hash": "f82b5e7ff65a77983bfaba1bef97a4be613d8ba6b044cbce093ccb7d99b392da"
 }

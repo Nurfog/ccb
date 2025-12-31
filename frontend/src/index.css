@@ -142,3 +142,9 @@ p {
     grid-template-columns: 1fr;
   }
 }
+
+/* Fix for Select Options in Dark Mode */
+option {
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+}

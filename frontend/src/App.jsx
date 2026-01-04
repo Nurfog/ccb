@@ -8,7 +8,11 @@ import CreateClient from './pages/CreateClient';
 import CompanyUsers from './pages/CompanyUsers';
 import TrainModel from './pages/TrainModel';
 import Predictions from './pages/Predictions';
+import ModelComparison from './pages/ModelComparison';
 import AuditLogs from './pages/AuditLogs';
+import ExecutiveClusters from './pages/ExecutiveClusters';
+import Layout from './components/Layout';
+import UnifiedDashboard from './pages/UnifiedDashboard';
 
 // Componente para proteger rutas
 const PrivateRoute = ({ children, roles = [] }) => {
@@ -30,77 +34,106 @@ function AppRoutes() {
     <Routes>
       <Route path="/login" element={<Login />} />
 
-      <Route
-        path="/dashboard"
-        element={
-          <PrivateRoute>
-            <Dashboard />
-          </PrivateRoute>
-        }
-      />
-
-      <Route
-        path="/create-user"
-        element={
-          <PrivateRoute roles={['root']}>
-            <CreateUser />
-          </PrivateRoute>
-        }
-      />
-
-      <Route
-        path="/create-client"
-        element={
-          <PrivateRoute roles={['root']}>
-            <CreateClient />
-          </PrivateRoute>
-        }
-      />
-
-      <Route
-        path="/company/users"
-        element={
-          <PrivateRoute roles={['root', 'company_admin']}>
-            <CompanyUsers />
-          </PrivateRoute>
-        }
-      />
-
-      <Route
-        path="/upload-data"
-        element={
-          <PrivateRoute roles={['root', 'company_admin', 'user']}>
-            <UploadData />
-          </PrivateRoute>
-        }
-      />
-
-      <Route
-        path="/train-model"
-        element={
-          <PrivateRoute>
-            <TrainModel />
-          </PrivateRoute>
-        }
-      />
-
-      <Route
-        path="/predictions"
-        element={
-          <PrivateRoute>
-            <Predictions />
-          </PrivateRoute>
-        }
-      />
-
-      <Route
-        path="/admin/logs"
-        element={
-          <PrivateRoute roles={['root']}>
-            <AuditLogs />
-          </PrivateRoute>
-        }
-      />
+      {/* Rutas protegidas dentro del Layout */}
+      <Route element={<Layout />}>
+        <Route
+          path="/dashboard"
+          element={
+            <PrivateRoute>
+              <Dashboard />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/unified-dashboard"
+          element={
+            <PrivateRoute>
+              <UnifiedDashboard />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/ml/predict"
+          element={
+            <PrivateRoute>
+              <Predictions />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/models/compare"
+          element={
+            <PrivateRoute>
+              <ModelComparison />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/create-user"
+          element={
+            <PrivateRoute roles={['root']}>
+              <CreateUser />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/create-client"
+          element={
+            <PrivateRoute roles={['root']}>
+              <CreateClient />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/company/users"
+          element={
+            <PrivateRoute roles={['root', 'company_admin']}>
+              <CompanyUsers />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/upload-data"
+          element={
+            <PrivateRoute roles={['root', 'company_admin', 'user']}>
+              <UploadData />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/train-model"
+          element={
+            <PrivateRoute>
+              <TrainModel />
+            </PrivateRoute>
+          }
+        />
+        {/* Mapping /predictions to same as /ml/predict for easier nav */}
+        <Route
+          path="/predictions"
+          element={
+            <PrivateRoute>
+              <Predictions />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/admin/logs"
+          element={
+            <PrivateRoute roles={['root']}>
+              <AuditLogs />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/executive-clusters"
+          element={
+            <PrivateRoute>
+              <ExecutiveClusters />
+            </PrivateRoute>
+          }
+        />
+      </Route>
 
       <Route path="/" element={<Navigate to="/dashboard" />} />
     </Routes>

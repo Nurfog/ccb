@@ -10,6 +10,8 @@ import psycopg2
 from datetime import datetime
 import pandas as pd
 from trainers.regression import RegressionTrainer, SimpleRegressionModel
+from trainers.timeseries import TimeSeriesTrainer, LSTMModel
+from trainers.clustering import ClusteringTrainer
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -40,6 +42,10 @@ class TrainRequest(BaseModel):
     schema_id: str
     model_type: str = "regression"
     hyperparameters: Dict[str, Any] = {}
+
+class ClusteringRequest(BaseModel):
+    schema_id: str
+    n_clusters: int = 3
 
 class PredictRequest(BaseModel):
     model_id: str
@@ -85,33 +91,61 @@ async def train_model(request: TrainRequest):
             bs = int(request.hyperparameters.get("batch_size", 32))
             
             model, metrics = trainer.train(X, y, epochs=epochs, learning_rate=lr, batch_size=bs)
+        
+        elif request.model_type == "time_series":
+            trainer = TimeSeriesTrainer(DEVICE)
             
-            # 3. Guardar en disco
-            model_id = str(uuid.uuid4())
-            model_path = f"/app/models/{model_id}.pt"
-            os.makedirs("/app/models", exist_ok=True)
+            # Para series de tiempo necesitamos una columna de fecha
+            date_column = request.hyperparameters.get("date_column")
+            if not date_column:
+                 # Intentar inferir
+                 for col in data[0].keys(): # Ver primer registro
+                     if 'date' in col.lower() or 'fecha' in col.lower():
+                         date_column = col
+                         break
             
-            torch.save({
-                'model_state': model.state_dict(),
-                'feature_names': feature_names,
-                'target_column': target_column,
-                'metadata': trainer.feature_metadata
-            }, model_path)
+            if not date_column:
+                raise HTTPException(status_code=400, detail="Se requiere una columna de fecha para series de tiempo")
+
+            seq_len = int(request.hyperparameters.get("sequence_length", 30))
             
-            # 4. Registrar en DB
-            cursor.execute("""
-                INSERT INTO ml_models (id, schema_id, client_id, model_type, model_path, metrics, feature_metadata, target_column)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, (
-                model_id, request.schema_id, client_id, request.model_type, 
-                model_path, json.dumps(metrics), json.dumps(trainer.feature_metadata), target_column
-            ))
-            conn.commit()
+            X, y, feature_names = trainer.prepare_data(data, target_column, date_column, seq_len)
             
-            cursor.close()
-            conn.close()
+            epochs = int(request.hyperparameters.get("epochs", 100))
+            lr = float(request.hyperparameters.get("learning_rate", 0.001))
+            bs = int(request.hyperparameters.get("batch_size", 32))
             
-            return {"model_id": model_id, "metrics": metrics, "device": str(DEVICE)}
+            model, metrics = trainer.train(X, y, epochs=epochs, learning_rate=lr, batch_size=bs)
+            
+        else:
+             raise HTTPException(status_code=400, detail="Tipo de modelo no soportado")
+            
+        # 3. Guardar en disco
+        model_id = str(uuid.uuid4())
+        model_path = f"/app/models/{model_id}.pt"
+        os.makedirs("/app/models", exist_ok=True)
+        
+        torch.save({
+            'model_state': model.state_dict(),
+            'feature_names': feature_names,
+            'target_column': target_column,
+            'metadata': trainer.feature_metadata
+        }, model_path)
+        
+        # 4. Registrar en DB
+        cursor.execute("""
+            INSERT INTO ml_models (id, schema_id, client_id, model_type, model_path, metrics, feature_metadata, target_column)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            model_id, request.schema_id, client_id, request.model_type, 
+            model_path, json.dumps(metrics), json.dumps(trainer.feature_metadata), target_column
+        ))
+        conn.commit()
+        
+        cursor.close()
+        conn.close()
+        
+        return {"model_id": model_id, "metrics": metrics, "device": str(DEVICE)}
         
         raise HTTPException(status_code=400, detail="Tipo de modelo no soportado")
     except Exception as e:
@@ -136,31 +170,65 @@ async def predict(request: PredictRequest):
         input_dim = len(feature_names)
         model = SimpleRegressionModel(input_dim).to(DEVICE)
         model.load_state_dict(checkpoint['model_state'])
+        model.load_state_dict(checkpoint['model_state'])
         model.eval()
+        
+        # Lógica de inferencia específica por tipo (simple para regresión, compleja para TS)
+        # Por ahora asumimos regresión si no es TS
         
         # Preprocesar input
         df = pd.DataFrame(request.data)
         
+        # ... (resto de predict) ...
+
+
+        # Normalizar nombres de columnas a lo que espera el modelo
+        # (Intentar mapear insensible a mayúsculas/minúsculas)
+        cols_lower = {c.lower(): c for c in df.columns}
+        
         # Aplicar mismas transformaciones que en el entrenamiento
         for col, meta in metadata.items():
-            if col == 'stats' or col not in df.columns: continue
-            if meta['type'] == 'categorical':
+            if col == 'stats': continue
+            
+            # Buscar la columna original en el input (fiel o insensible)
+            orig_col = None
+            if col in df.columns:
+                orig_col = col
+            elif col.lower() in cols_lower:
+                orig_col = cols_lower[col.lower()]
+                df[col] = df[orig_col] # Renombrar internamente para coincidir con modelo
+            
+            if meta['type'] == 'categorical' and col in df.columns:
                 uniques = meta['uniques']
                 df[col] = df[col].apply(lambda x: uniques.index(x) if x in uniques else -1)
         
-        # Fechas si existen
-        for col in df.columns:
+        # Manejar fechas (expandir antes de seleccionar features)
+        for col in list(df.columns):
             if 'fecha' in col.lower() or 'date' in col.lower():
                 dates = pd.to_datetime(df[col], errors='coerce')
-                df[f'{col}_month'] = dates.dt.month.fillna(1)
-                df[f'{col}_day'] = dates.dt.dayofweek.fillna(0)
+                # Usar el nombre de columna que el modelo espera si es posible
+                model_col = next((fn for fn in feature_names if fn.lower().startswith(col.lower())), col)
+                if '_' in model_col:
+                    base_name = model_col.split('_')[0]
+                else:
+                    base_name = col
+                    
+                df[f'{base_name}_month'] = dates.dt.month.fillna(1)
+                df[f'{base_name}_day'] = dates.dt.dayofweek.fillna(0)
 
         # Seleccionar features y normalizar
         stats = metadata['stats']
+        
+        # Asegurar que todas las features existen, si faltan, rellenar con 0 (o media si es común)
+        for col in feature_names:
+            if col not in df.columns:
+                logger.warning(f"Feature '{col}' faltante en input, rellenando con 0")
+                df[col] = 0
+                
         X_df = df[feature_names].astype('float32')
         for col in feature_names:
-            mean = stats['mean'][col]
-            std = stats['std'][col]
+            mean = stats['mean'].get(col, 0)
+            std = stats['std'].get(col, 1)
             X_df[col] = (X_df[col] - mean) / (std + 1e-8)
             
         X_tensor = torch.from_numpy(X_df.values).to(DEVICE)
@@ -175,6 +243,33 @@ async def predict(request: PredictRequest):
     except Exception as e:
         logger.error(f"Error predicción: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/train/clustering")
+async def train_clustering(request: ClusteringRequest):
+    try:
+        conn = psycopg2.connect(DB_URL)
+        cursor = conn.cursor()
+        
+        # Obtener datos
+        cursor.execute("SELECT data FROM ml_data WHERE schema_id = %s LIMIT 5000", (request.schema_id,))
+        rows = cursor.fetchall()
+        
+        if not rows:
+            raise HTTPException(status_code=404, detail="No hay datos para agrupar")
+            
+        data = [r[0] for r in rows]
+        
+        trainer = ClusteringTrainer()
+        result = trainer.train(data, n_clusters=request.n_clusters)
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error clustering: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if 'conn' in locals(): conn.close()
+        if 'cursor' in locals(): cursor.close()
 
 @app.get("/models")
 async def list_models(client_id: str = None):

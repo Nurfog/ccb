@@ -2,7 +2,9 @@ import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { Lock, Mail } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import ClientAutocomplete from '../components/ClientAutocomplete';
+import LanguageSwitcher from '../components/LanguageSwitcher';
 
 export default function Login() {
     const [email, setEmail] = useState('');
@@ -11,6 +13,7 @@ export default function Login() {
     const [error, setError] = useState('');
     const { login } = useAuth();
     const navigate = useNavigate();
+    const { t } = useTranslation();
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -39,28 +42,31 @@ export default function Login() {
     return (
         <div className="center-content">
             <div className="card" style={{ width: '100%', maxWidth: '400px' }}>
-                <h2 style={{ textAlign: 'center', marginBottom: '2rem', fontSize: '2rem' }}>Bienvenido</h2>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+                    <h2 style={{ margin: 0, fontSize: '2rem' }}>{t('common.welcome')}</h2>
+                    <LanguageSwitcher />
+                </div>
                 {error && <div style={{ color: '#fca5a5', background: 'rgba(239, 68, 68, 0.1)', padding: '0.75rem', borderRadius: '8px', marginBottom: '1.5rem', textAlign: 'center' }}>{error}</div>}
 
                 {selectedClient && (
                     <div style={{ textAlign: 'center', marginBottom: '1.5rem', color: '#4ade80', background: 'rgba(34, 197, 94, 0.1)', padding: '0.5rem', borderRadius: '8px' }}>
-                        Conectando a: <strong>{selectedClient.name}</strong>
+                        {t('login.connecting_to')}: <strong>{selectedClient.name}</strong>
                     </div>
                 )}
 
                 <form onSubmit={handleSubmit}>
                     <div className="form-group">
-                        <label className="form-label">Identificar Empresa (Opcional)</label>
+                        <label className="form-label">{t('login.identify_company')}</label>
                         <ClientAutocomplete
                             isPublic={true}
                             onSelect={setSelectedClient}
-                            placeholder="Buscar organización..."
+                            placeholder={t('login.search_placeholder')}
                         />
                     </div>
 
                     <div className="form-group" style={{ position: 'relative' }}>
                         <Mail size={20} style={{ position: 'absolute', left: '12px', top: '42px', color: '#94a3b8' }} />
-                        <label className="form-label">Correo Electrónico</label>
+                        <label className="form-label">{t('common.email')}</label>
                         <input
                             type="email"
                             className="form-input"
@@ -74,7 +80,7 @@ export default function Login() {
 
                     <div className="form-group" style={{ position: 'relative' }}>
                         <Lock size={20} style={{ position: 'absolute', left: '12px', top: '42px', color: '#94a3b8' }} />
-                        <label className="form-label">Contraseña</label>
+                        <label className="form-label">{t('common.password')}</label>
                         <input
                             type="password"
                             className="form-input"
@@ -91,7 +97,7 @@ export default function Login() {
                         className="btn btn-primary"
                         style={{ width: '100%', marginTop: '1rem' }}
                     >
-                        Iniciar Sesión
+                        {t('login.submit')}
                     </button>
                 </form>
             </div>

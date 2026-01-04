@@ -11,9 +11,11 @@ export default function TrainModel() {
     const [selectedDataset, setSelectedDataset] = useState(null);
     const [targetColumn, setTargetColumn] = useState('');
     const [hyperparams, setHyperparams] = useState({
+        model_type: 'regression', // 'regression' or 'time_series'
         epochs: 100,
         learning_rate: 0.001,
-        batch_size: 32
+        batch_size: 32,
+        sequence_length: 30 // Para Time Series
     });
     const [training, setTraining] = useState(false);
     const [result, setResult] = useState(null);
@@ -100,10 +102,10 @@ export default function TrainModel() {
                 WebkitTextFillColor: 'transparent'
             }}>
                 <Brain size={32} style={{ color: '#8b5cf6' }} />
-                Entrenar Modelo ML
+                Entrenar Modelo (Red Neuronal)
             </h1>
             <p style={{ marginBottom: '2rem', color: '#94a3b8' }}>
-                Entrena un modelo de regresión con tus datos usando GPU acelerado
+                Entrena una <strong>Red Neuronal Profunda</strong> para regresión usando tu GPU
             </p>
 
             {/* Selección de Dataset */}
@@ -165,9 +167,51 @@ export default function TrainModel() {
                                 onChange={(e) => setTargetColumn(e.target.value)}
                             />
                             <p style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '0.5rem' }}>
-                                La columna que quieres predecir
+                                La columna que la Red Neuronal intentará predecir
                             </p>
                         </div>
+
+                        <div className="form-group">
+                            <label className="form-label">Tipo de Modelo</label>
+                            <select
+                                className="form-select"
+                                value={hyperparams.model_type}
+                                onChange={(e) => setHyperparams({ ...hyperparams, model_type: e.target.value })}
+                            >
+                                <option value="regression">Red Neuronal Tabular (Predicción Estándar)</option>
+                                <option value="time_series">Serie de Tiempo LSTM (Predicción Secuencial)</option>
+                            </select>
+                        </div>
+
+                        {hyperparams.model_type === 'regression' ? (
+                            <div className="form-group" style={{ marginBottom: '1rem', padding: '1rem', background: 'rgba(139, 92, 246, 0.05)', borderRadius: '8px', border: '1px dashed #8b5cf6' }}>
+                                <label className="form-label" style={{ color: '#a78bfa' }}>Arquitectura del Modelo</label>
+                                <div style={{ fontSize: '0.9rem', color: '#e2e8f0' }}>Perceptrón Multicapa (MLP)</div>
+                                <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>Ideal para: Predecir valores basados en características independientes (ej: precio casa por m2)</div>
+                            </div>
+                        ) : (
+                            <div className="form-group" style={{ marginBottom: '1rem', padding: '1rem', background: 'rgba(6, 182, 212, 0.05)', borderRadius: '8px', border: '1px dashed #06b6d4' }}>
+                                <label className="form-label" style={{ color: '#22d3ee' }}>Arquitectura del Modelo</label>
+                                <div style={{ fontSize: '0.9rem', color: '#e2e8f0' }}>LSTM (Long Short-Term Memory)</div>
+                                <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>Ideal para: Series históricas (ej: ventas diarias, stock, criptomonedas)</div>
+
+                                <div style={{ marginTop: '1rem' }}>
+                                    <label className="form-label" style={{ fontSize: '0.9rem' }}>Ventana de Tiempo (Días): {hyperparams.sequence_length}</label>
+                                    <input
+                                        type="range"
+                                        min="7"
+                                        max="365"
+                                        step="1"
+                                        value={hyperparams.sequence_length}
+                                        onChange={(e) => setHyperparams({ ...hyperparams, sequence_length: parseInt(e.target.value) })}
+                                        style={{ width: '100%' }}
+                                    />
+                                    <p style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
+                                        El modelo mirará los últimos {hyperparams.sequence_length} registros para predecir el siguiente.
+                                    </p>
+                                </div>
+                            </div>
+                        )}
 
                         <div className="form-group">
                             <label className="form-label">Epochs: {hyperparams.epochs}</label>

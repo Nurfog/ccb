@@ -41,6 +41,7 @@ Plataforma empresarial multitenancy para gestión de datos y análisis de Machin
 - **Sistema de Diseño Unificado**: Componentes CSS reutilizables
 - **Dark Mode**: Tema oscuro profesional por defecto
 - **Animaciones Suaves**: Micro-interacciones para mejor UX
+- **Multi-idioma (i18n)**: Soporte nativo para Español e Inglés con detección automática.
 
 ### Machine Learning
 - **PyTorch + CUDA**: Aceleración GPU para entrenamiento rápido
@@ -81,9 +82,17 @@ Plataforma empresarial multitenancy para gestión de datos y análisis de Machin
    JWT_SECRET=tu_secreto_super_seguro_aqui_cambiame
    ```
 
-3. **Iniciar servicios con Docker**
+3. **Iniciar servicios**
+   
+   Recomendamos usar el script de utilidad incluido, que configura automáticamente el perfil GPU/CPU correcto y evita conflictos de puertos:
+
    ```bash
-   docker compose up -d
+   ./start.sh
+   ```
+
+   O manualmente con Docker Compose:
+   ```bash
+   docker compose --profile gpu up -d
    ```
 
    Esto iniciará:

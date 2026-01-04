@@ -175,16 +175,27 @@ class RegressionTrainer:
             preds = model(X)
             final_loss = criterion(preds, y).item()
             
-            # R2 Score
-            ss_res = torch.sum((y - preds) ** 2).item()
-            ss_tot = torch.sum((y - y.mean()) ** 2).item()
             r2_score = 1 - (ss_res / (ss_tot + 1e-8))
             
+            # Generar datos para gráfico "Actual vs Predicted" (Sampleado)
+            actuals = y.cpu().numpy().flatten()
+            predictions = preds.cpu().numpy().flatten()
+            
+            scatter_data = []
+            sample_indices = np.random.choice(len(actuals), size=min(len(actuals), 300), replace=False)
+            
+            for idx in sample_indices:
+                scatter_data.append({
+                    "actual": float(actuals[idx]),
+                    "predicted": float(predictions[idx])
+                })
+            
         return model, {
-            'final_loss': float(final_loss),
+            'mse': float(final_loss),
             'r2_score': float(r2_score),
             'samples': n_samples,
             'features': input_dim,
-            'metadata': self.feature_metadata
+            'metadata': self.feature_metadata,
+            'scatter_data': scatter_data
         }
 

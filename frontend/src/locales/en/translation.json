@@ -1,0 +1,34 @@
+{
+    "common": {
+        "welcome": "Welcome",
+        "login": "Login",
+        "email": "Email",
+        "password": "Password",
+        "loading": "Loading...",
+        "error": "Error",
+        "success": "Success",
+        "back": "Back"
+    },
+    "login": {
+        "identify_company": "Identify Company (Optional)",
+        "search_placeholder": "Search organization...",
+        "connecting_to": "Connecting to",
+        "submit": "Login"
+    },
+    "predictions": {
+        "title": "Make Predictions",
+        "subtitle": "Use your trained models to get immediate results",
+        "select_model": "Select Model",
+        "no_models": "No trained models found. Train one first.",
+        "model_details": "Model Details",
+        "target": "Target",
+        "type": "Type",
+        "trained_date": "Trained",
+        "input_data": "Input Data",
+        "select_option": "Select...",
+        "get_prediction": "Get Prediction",
+        "calculating": "Calculating...",
+        "result_label": "Prediction for",
+        "based_on": "Based on model training"
+    }
+}

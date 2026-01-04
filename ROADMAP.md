@@ -7,4 +7,10 @@
 - [x] Exportación de reportes (PDF/Excel)
 - [x] Logs de auditoría
 - [ ] Two-Factor Authentication (2FA)
-- [ ] Soporte multi-idioma (i18n)
+- [x] Soporte multi-idioma (i18n)
+
+## 🚀 Próximas Implementaciones (Solicitadas)
+- [x] Predicciones por Lotes (Carga de Excel/CSV)
+- [x] Comparador de Modelos (Gráficas comparativas de rendimiento)
+- [ ] Modo Claro/Oscuro (Theme Switcher)
+- [ ] Two-Factor Authentication (2FA) (Movido)

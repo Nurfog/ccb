@@ -1,13 +1,15 @@
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
-import { LogOut, TrendingUp, Users, Building, Database, BarChart3, Activity, Clock, FileText, Shield, Download, FileSpreadsheet } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { LogOut, TrendingUp, Users, Building, Database, BarChart3, Activity, Clock, FileText, Shield, Download, FileSpreadsheet, Building2, Settings, Upload, Plus, Brain, BarChart2, Network } from 'lucide-react';
 import DashboardCharts from '../components/DashboardCharts';
 import NotificationsDropdown from '../components/NotificationsDropdown';
 
 export default function Dashboard() {
     const { user, logout, token } = useAuth();
     const navigate = useNavigate();
+    const { t } = useTranslation();
     const [stats, setStats] = useState(null);
     const [analytics, setAnalytics] = useState(null);
     const [charts, setCharts] = useState(null);
@@ -224,6 +226,42 @@ export default function Dashboard() {
                     )}
                 </div>
 
+                <div onClick={() => navigate('/ml/predict')} className="dashboard-card action-card" style={{ cursor: 'pointer', borderLeft: '4px solid #8b5cf6' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+                        <div style={{ padding: '0.75rem', borderRadius: '12px', background: 'rgba(139, 92, 246, 0.1)', color: '#8b5cf6' }}>
+                            <Activity size={24} />
+                        </div>
+                        <div>
+                            <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Ejecutar Predicciones</h3>
+                            <p style={{ margin: 0, color: '#94a3b8', fontSize: '0.9rem' }}>Ejecutar modelos </p>
+                        </div>
+                    </div>
+                </div>
+
+                <div onClick={() => navigate('/models/compare')} className="dashboard-card action-card" style={{ cursor: 'pointer', borderLeft: '4px solid #3b82f6' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+                        <div style={{ padding: '0.75rem', borderRadius: '12px', background: 'rgba(59, 130, 246, 0.1)', color: '#3b82f6' }}>
+                            <BarChart2 size={24} />
+                        </div>
+                        <div>
+                            <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Comparar Modelos</h3>
+                            <p style={{ margin: 0, color: '#94a3b8', fontSize: '0.9rem' }}>Ver gráficas de precisión</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div onClick={() => navigate('/executive-clusters')} className="dashboard-card action-card" style={{ cursor: 'pointer', borderLeft: '4px solid #06b6d4' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+                        <div style={{ padding: '0.75rem', borderRadius: '12px', background: 'rgba(6, 182, 212, 0.1)', color: '#06b6d4' }}>
+                            <Network size={24} />
+                        </div>
+                        <div>
+                            <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Agrupamiento Visual</h3>
+                            <p style={{ margin: 0, color: '#94a3b8', fontSize: '0.9rem' }}>Segmentación automática 2D</p>
+                        </div>
+                    </div>
+                </div>
+
                 {/* Stats Summary */}
                 <div className="card" style={{ padding: '1.5rem' }}>
                     <h3 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#8b5cf6' }}>
@@ -336,14 +374,14 @@ export default function Dashboard() {
                     <button
                         className="btn btn-primary"
                         style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
-                        onClick={() => window.open(window.location.protocol + '//' + window.location.hostname + ':3000/api/stats/export/excel', '_blank')}
+                        onClick={() => window.open(window.location.protocol + '//' + window.location.hostname + ':3004/api/stats/export/excel', '_blank')}
                     >
                         <FileSpreadsheet size={18} /> Exportar Excel
                     </button>
                     <button
                         className="btn btn-ghost"
                         style={{ display: 'flex', alignItems: 'center', gap: '8px', border: '1px solid #334155' }}
-                        onClick={() => window.open(window.location.protocol + '//' + window.location.hostname + ':3000/api/stats/export/pdf', '_blank')}
+                        onClick={() => window.open(window.location.protocol + '//' + window.location.hostname + ':3004/api/stats/export/pdf', '_blank')}
                     >
                         <Download size={18} /> Exportar PDF
                     </button>

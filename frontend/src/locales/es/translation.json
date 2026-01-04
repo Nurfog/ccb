@@ -1,0 +1,34 @@
+{
+    "common": {
+        "welcome": "Bienvenido",
+        "login": "Iniciar Sesión",
+        "email": "Correo Electrónico",
+        "password": "Contraseña",
+        "loading": "Cargando...",
+        "error": "Error",
+        "success": "Éxito",
+        "back": "Volver"
+    },
+    "login": {
+        "identify_company": "Identificar Empresa (Opcional)",
+        "search_placeholder": "Buscar organización...",
+        "connecting_to": "Conectando a",
+        "submit": "Iniciar Sesión"
+    },
+    "predictions": {
+        "title": "Realizar Predicciones",
+        "subtitle": "Usa tus modelos entrenados para obtener resultados inmediatos",
+        "select_model": "Seleccionar Modelo",
+        "no_models": "No hay modelos entrenados. Entrena uno primero.",
+        "model_details": "Detalles del Modelo",
+        "target": "Target",
+        "type": "Tipo",
+        "trained_date": "Entrenado",
+        "input_data": "Datos de Entrada",
+        "select_option": "Seleccionar...",
+        "get_prediction": "Obtener Predicción",
+        "calculating": "Calculando...",
+        "result_label": "Predicción para",
+        "based_on": "Basado en el entrenamiento del modelo"
+    }
+}

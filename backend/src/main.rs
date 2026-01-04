@@ -13,8 +13,12 @@ use axum_extra::{
     headers::{authorization::Bearer, Authorization},
     TypedHeader,
 };
+use calamine::{open_workbook_from_rs, Reader, Xlsx};
 use chrono::{DateTime, Duration, Utc};
+use csv::ReaderBuilder;
+use futures::stream::{self, StreamExt};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use rust_xlsxwriter::Workbook;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::postgres::{PgPool, PgPoolOptions};
@@ -77,9 +81,12 @@ async fn main() {
         .route("/api/stats", get(get_stats))
         .route("/api/analytics", get(get_analytics))
         .route("/api/ml/train", post(train_ml_model))
+        .route("/api/ml/train/clustering", post(train_clustering_model)) // Nueva ruta de clustering
         .route("/api/ml/models", get(get_ml_models))
         .route("/api/ml/models/:id", get(get_ml_model_details))
         .route("/api/ml/predict", post(predict_ml_model))
+        .route("/api/ml/batch-predict", post(batch_predict_ml_model))
+        .route("/api/ml/train-all", post(train_all_models))
         .route("/api/ml/models/:id", delete(delete_ml_model))
         .route("/api/stats/charts", get(get_dashboard_charts))
         .route("/api/users/me", get(get_me))
@@ -834,6 +841,26 @@ struct TrainMLRequest {
 }
 
 #[derive(Deserialize, Serialize)]
+struct ClusteringRequest {
+    schema_id: uuid::Uuid,
+    n_clusters: i32,
+}
+
+#[derive(Deserialize)]
+struct TrainAllRequest {
+    client_id: Option<uuid::Uuid>,
+    force: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct TrainAllResponse {
+    total_schemas: usize,
+    trained: Vec<String>,
+    skipped: Vec<String>,
+    errors: Vec<String>,
+}
+
+#[derive(Deserialize, Serialize)]
 struct PredictMLRequest {
     model_id: uuid::Uuid,
     data: Vec<serde_json::Value>,
@@ -1279,6 +1306,183 @@ async fn get_me(auth_user: AuthUser) -> Json<AuthUser> {
     Json(auth_user)
 }
 
+async fn train_clustering_model(
+    State(_state): State<AppState>,
+    auth_user: AuthUser,
+    Json(payload): Json<ClusteringRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Validar permisos
+    if auth_user.access_level != "read_write" {
+        return Err(AppError::Forbidden(
+            "Necesitas permisos de escritura".into(),
+        ));
+    }
+
+    let ml_request = serde_json::json!({
+        "schema_id": payload.schema_id.to_string(),
+        "n_clusters": payload.n_clusters
+    });
+
+    let client = reqwest::Client::new();
+    let res = client
+        .post(format!("http://ccb_ml_service:8000/train/clustering"))
+        .json(&ml_request)
+        .send()
+        .await
+        .map_err(|_| AppError::InternalError)?;
+
+    if !res.status().is_success() {
+        let error_text = res
+            .text()
+            .await
+            .unwrap_or_else(|_| "Error desconocido en ML Service".to_string());
+        return Err(AppError::BadRequest(error_text));
+    }
+
+    let json_response: serde_json::Value = res.json().await.map_err(|_| AppError::InternalError)?;
+
+    Ok(Json(json_response))
+}
+
+async fn train_all_models(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Json(payload): Json<TrainAllRequest>,
+) -> Result<Json<TrainAllResponse>, AppError> {
+    // Only root or company_admin can trigger train-all
+    if auth_user.role != UserRole::Root && auth_user.role != UserRole::CompanyAdmin {
+        return Err(AppError::Forbidden("Permiso denegado".into()));
+    }
+
+    let force = payload.force.unwrap_or(false);
+
+    // Fetch schemas (optionally filtered by client_id)
+    let schemas: Vec<(uuid::Uuid, String)> = if let Some(client_id) = payload.client_id {
+        sqlx::query_as::<_, (uuid::Uuid, String)>(
+            "SELECT id, name FROM ml_schemas WHERE client_id = $1",
+        )
+        .bind(client_id)
+        .fetch_all(&state.db_pool)
+        .await
+        .map_err(AppError::DatabaseError)?
+    } else {
+        // If root, fetch all schemas
+        if auth_user.role == UserRole::Root {
+            sqlx::query_as::<_, (uuid::Uuid, String)>("SELECT id, name FROM ml_schemas")
+                .fetch_all(&state.db_pool)
+                .await
+                .map_err(AppError::DatabaseError)?
+        } else {
+            // Company admin: fetch only their client's schemas
+            if let Some(client_id) = auth_user.client_id {
+                sqlx::query_as::<_, (uuid::Uuid, String)>(
+                    "SELECT id, name FROM ml_schemas WHERE client_id = $1",
+                )
+                .bind(client_id)
+                .fetch_all(&state.db_pool)
+                .await
+                .map_err(AppError::DatabaseError)?
+            } else {
+                return Err(AppError::BadRequest("No client_id found for user".into()));
+            }
+        }
+    };
+
+    let total_schemas = schemas.len();
+    let mut trained = Vec::new();
+    let mut skipped = Vec::new();
+    let mut errors = Vec::new();
+
+    // Process schemas in parallel (max 3 concurrent)
+    let results = stream::iter(schemas)
+        .map(|(schema_id, schema_name)| {
+            let db_pool = state.db_pool.clone();
+            async move {
+                // Check if there's new data since last model
+                let last_model_time: Option<DateTime<Utc>> = sqlx::query_scalar(
+                    "SELECT MAX(created_at) FROM ml_models WHERE schema_id = $1",
+                )
+                .bind(schema_id)
+                .fetch_optional(&db_pool)
+                .await
+                .ok()
+                .flatten();
+
+                let has_new_data = if let Some(last_time) = last_model_time {
+                    let count: i64 = sqlx::query_scalar(
+                        "SELECT COUNT(*) FROM ml_data WHERE schema_id = $1 AND created_at > $2",
+                    )
+                    .bind(schema_id)
+                    .bind(last_time)
+                    .fetch_one(&db_pool)
+                    .await
+                    .unwrap_or(0);
+                    count > 0
+                } else {
+                    // No model exists yet, consider as "new data"
+                    true
+                };
+
+                if !has_new_data && !force {
+                    return (schema_id, schema_name, "skipped".to_string());
+                }
+
+                // Trigger training via ML service
+                let client = reqwest::Client::new();
+                let train_request = serde_json::json!({
+                    "schema_id": schema_id.to_string(),
+                    "model_type": "regression", // Default to regression
+                    "hyperparameters": {
+                        "epochs": 100,
+                        "learning_rate": 0.001,
+                        "batch_size": 32
+                    }
+                });
+
+                match client
+                    .post("http://ccb_ml_service:8000/train")
+                    .json(&train_request)
+                    .timeout(StdDuration::from_secs(300)) // 5 min timeout per model
+                    .send()
+                    .await
+                {
+                    Ok(res) if res.status().is_success() => {
+                        (schema_id, schema_name, "trained".to_string())
+                    }
+                    Ok(res) => {
+                        let err_msg = res
+                            .text()
+                            .await
+                            .unwrap_or_else(|_| "Unknown error".to_string());
+                        (schema_id, schema_name, format!("error: {}", err_msg))
+                    }
+                    Err(e) => (schema_id, schema_name, format!("error: {}", e)),
+                }
+            }
+        })
+        .buffer_unordered(3) // Max 3 concurrent training jobs
+        .collect::<Vec<_>>()
+        .await;
+
+    // Categorize results
+    for (schema_id, schema_name, status) in results {
+        if status == "trained" {
+            trained.push(format!("{} ({})", schema_name, schema_id));
+        } else if status == "skipped" {
+            skipped.push(format!("{} ({})", schema_name, schema_id));
+        } else {
+            errors.push(format!("{} ({}): {}", schema_name, schema_id, status));
+        }
+    }
+
+    Ok(Json(TrainAllResponse {
+        total_schemas,
+        trained,
+        skipped,
+        errors,
+    }))
+}
+
 // --- Client Handler (Updated) ---
 
 async fn create_client(
@@ -1539,4 +1743,207 @@ impl IntoResponse for AppError {
         };
         (status, Json(json!({ "error": msg }))).into_response()
     }
+}
+
+async fn batch_predict_ml_model(
+    State(_state): State<AppState>,
+    _auth_user: AuthUser, // Require auth
+    mut multipart: Multipart,
+) -> Result<impl IntoResponse, AppError> {
+    let mut model_id = None;
+    let mut file_bytes = None;
+    let mut file_name = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| AppError::BadRequest("Error parsing multipart".into()))?
+    {
+        let name = field.name().unwrap_or("").to_string();
+        if name == "model_id" {
+            model_id = Some(
+                field
+                    .text()
+                    .await
+                    .map_err(|_| AppError::BadRequest("Error reading model_id".into()))?,
+            );
+        } else if name == "file" {
+            file_name = field.file_name().map(|s| s.to_string());
+            file_bytes = Some(
+                field
+                    .bytes()
+                    .await
+                    .map_err(|_| AppError::BadRequest("Error reading file".into()))?,
+            );
+        }
+    }
+
+    let model_id = model_id.ok_or(AppError::BadRequest("model_id is required".into()))?;
+    let file_bytes = file_bytes.ok_or(AppError::BadRequest("file is required".into()))?;
+    let file_name = file_name.unwrap_or("prediction.xlsx".to_string());
+
+    let mut data_rows: Vec<serde_json::Map<String, Value>> = Vec::new();
+
+    if file_name.ends_with(".xlsx") || file_name.ends_with(".xls") {
+        let mut workbook: Xlsx<_> = open_workbook_from_rs(Cursor::new(file_bytes))
+            .map_err(|_| AppError::BadRequest("Invalid Excel file".into()))?;
+
+        let range = workbook
+            .worksheet_range_at(0)
+            .ok_or(AppError::BadRequest("No worksheets found".into()))?
+            .map_err(|_| AppError::BadRequest("Error reading worksheet".into()))?;
+
+        let mut headers = Vec::new();
+        for (i, row) in range.rows().enumerate() {
+            if i == 0 {
+                headers = row.iter().map(|c| c.to_string()).collect();
+            } else {
+                let mut row_map = serde_json::Map::new();
+                for (j, cell) in row.iter().enumerate() {
+                    if j < headers.len() {
+                        let val = match cell {
+                            calamine::Data::Int(v) => json!(v),
+                            calamine::Data::Float(v) => json!(v),
+                            calamine::Data::String(v) => json!(v),
+                            calamine::Data::Bool(v) => json!(v),
+                            calamine::Data::DateTime(v) => json!(v.to_string()),
+                            _ => json!(""),
+                        };
+                        row_map.insert(headers[j].clone(), val);
+                    }
+                }
+                data_rows.push(row_map);
+            }
+        }
+    } else if file_name.ends_with(".csv") {
+        // Intentar detectar si usa coma o punto y coma
+        let sample_len = file_bytes.len().min(1000);
+        let content_sample = String::from_utf8_lossy(&file_bytes[..sample_len]);
+        let delimiter = if content_sample.matches(';').count() > content_sample.matches(',').count()
+        {
+            b';'
+        } else {
+            b','
+        };
+
+        let mut rdr = ReaderBuilder::new()
+            .delimiter(delimiter)
+            .from_reader(Cursor::new(file_bytes));
+        for result in rdr.deserialize() {
+            let record: serde_json::Map<String, Value> =
+                result.map_err(|_| AppError::BadRequest("Invalid CSV".into()))?;
+            data_rows.push(record);
+        }
+    } else {
+        return Err(AppError::BadRequest("Unsupported file format".into()));
+    }
+
+    if data_rows.is_empty() {
+        return Err(AppError::BadRequest("No data rows found".into()));
+    }
+
+    // Call ML Service
+    let client = reqwest::Client::new();
+    let response = client
+        .post("http://ccb_ml_service:8000/predict")
+        .json(&json!({
+            "model_id": model_id,
+            "data": data_rows
+        }))
+        .send()
+        .await
+        .map_err(|_| AppError::InternalError)?;
+
+    if !response.status().is_success() {
+        let err_body: Value = response
+            .json()
+            .await
+            .unwrap_or(json!({"detail": "Unknown error"}));
+        let msg = err_body
+            .get("detail")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Error in ML service");
+        return Err(AppError::BadRequest(msg.into()));
+    }
+
+    let result: Value = response.json().await.map_err(|_| AppError::InternalError)?;
+    let predictions = result
+        .get("predictions")
+        .and_then(|v| v.as_array())
+        .ok_or(AppError::InternalError)?;
+
+    // Create Excel Output
+    let mut workbook = Workbook::new();
+    let worksheet = workbook.add_worksheet();
+
+    // Write Headers (+ Prediction)
+    let headers: Vec<String> = data_rows
+        .first()
+        .map(|r| r.keys().cloned().collect())
+        .unwrap_or_default();
+
+    for (i, header) in headers.iter().enumerate() {
+        worksheet
+            .write_string(0, i as u16, header)
+            .map_err(|_| AppError::InternalError)?;
+    }
+    worksheet
+        .write_string(0, headers.len() as u16, "Prediction")
+        .map_err(|_| AppError::InternalError)?;
+
+    // Enable Autofilter
+    worksheet
+        .autofilter(0, 0, data_rows.len() as u32, headers.len() as u16)
+        .map_err(|_| AppError::InternalError)?;
+
+    // Auto-size columns (best effort)
+    worksheet
+        .set_column_width(0, 20)
+        .map_err(|_| AppError::InternalError)?;
+    for i in 1..=headers.len() {
+        worksheet
+            .set_column_width(i as u16, 15)
+            .map_err(|_| AppError::InternalError)?;
+    }
+
+    // Write Data
+    for (i, row) in data_rows.iter().enumerate() {
+        for (j, header) in headers.iter().enumerate() {
+            if let Some(val) = row.get(header) {
+                let s = val
+                    .as_str()
+                    .map(|s| s.to_string())
+                    .or_else(|| val.as_f64().map(|f| f.to_string()))
+                    .or_else(|| val.as_i64().map(|i| i.to_string()))
+                    .unwrap_or_default();
+                worksheet
+                    .write_string((i + 1) as u32, j as u16, s)
+                    .map_err(|_| AppError::InternalError)?;
+            }
+        }
+        // Write Prediction
+        if let Some(pred) = predictions.get(i) {
+            let p = pred.as_f64().unwrap_or(0.0);
+            worksheet
+                .write_number((i + 1) as u32, headers.len() as u16, p)
+                .map_err(|_| AppError::InternalError)?;
+        }
+    }
+
+    let buf = workbook
+        .save_to_buffer()
+        .map_err(|_| AppError::InternalError)?;
+
+    let headers = [
+        (
+            header::CONTENT_TYPE,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
+        (
+            header::CONTENT_DISPOSITION,
+            "attachment; filename=\"predictions.xlsx\"",
+        ),
+    ];
+
+    Ok((headers, buf))
 }
